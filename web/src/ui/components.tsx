@@ -1,7 +1,15 @@
 import { useEffect, useRef } from "react";
 import { affixText } from "../game/player";
 import { sprite } from "../render/sprites";
+import { tex, texReady } from "../render/atlas";
 import type { ClassDef, CombatState, Equipment, LogLine, PlayerState } from "../game/types";
+
+// 职业精灵 -> 0x72 动画基名(与 renderer HERO_ANIM 一致)
+const HERO_FRAME: Record<string, string> = {
+  hero_mage: "wizzard_m_idle_anim_f0",
+  hero_berserker: "knight_m_idle_anim_f0",
+  hero_engineer: "elf_m_idle_anim_f0",
+};
 
 // ---------------- 基础 ----------------
 export function Bar({ ratio, color }: { ratio: number; color: string }) {
@@ -15,14 +23,24 @@ export function Bar({ ratio, color }: { ratio: number; color: string }) {
 export function SpriteView({ spriteKey, scale = 4 }: { spriteKey: string; scale?: number }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
-    const cv = ref.current;
-    if (!cv) return;
-    const ctx = cv.getContext("2d")!;
-    ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, cv.width, cv.height);
-    ctx.drawImage(sprite(spriteKey), 0, 0, cv.width, cv.height);
+    let alive = true;
+    const draw = () => {
+      if (!alive) return;
+      const cv = ref.current;
+      if (!cv) return;
+      const ctx = cv.getContext("2d")!;
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      const zeroFrame = HERO_FRAME[spriteKey];
+      const img = zeroFrame ? tex(zeroFrame) : undefined;
+      if (img) ctx.drawImage(img, 0, 0, cv.width, cv.height);
+      else ctx.drawImage(sprite(spriteKey), 0, 0, cv.width, cv.height);
+    };
+    draw();
+    texReady.then(draw);
+    return () => { alive = false; };
   }, [spriteKey]);
-  return <canvas ref={ref} className="pixel" width={12} height={12} style={{ width: 12 * scale, height: 12 * scale }} />;
+  return <canvas ref={ref} className="pixel" width={16} height={16} style={{ width: 16 * scale, height: 16 * scale }} />;
 }
 
 /** rAF 绘制循环容器。drawRef 指向最新绘制函数, 避免每帧重挂 effect。 */

@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { CLASSES, EMPTY_LINES } from "./game/data";
-import { makeElite, maxHp, playerAtk, recLevel, rollEquipment } from "./game/player";
+import { makeElite, maxHp, recLevel, rollEquipment } from "./game/player";
 import { Rng } from "./game/rng";
 import { clearSave, loadGame, saveGame } from "./game/save";
 import {
@@ -12,10 +12,15 @@ import {
 } from "./game/combat";
 import type { Action } from "./game/combat";
 import type { CombatState, Equipment, FloorMap, LogLine, Monster, PlayerState } from "./game/types";
-import { renderCombat, renderDungeon } from "./render/renderer";
 import {
-  CombatMenu, CombatStatus, CreateScreen, DeadScreen, GameCanvas,
-  InventoryPanel, LootPanel, LogPanel, MerchantPanel, MerchantOffer, PortalPanel, StatusHud, TitleScreen,
+  addWorldFloat, attackAnim, clearSceneFx, dungeonThemeName, faceDir, hitStopFx, renderCombat, renderDungeon, setDungeonTheme, shakeCam,
+  worldToScreenCam,
+} from "./render/renderer";
+import * as fx from "./render/particles";
+import { ActionBar, BossBar, Minimap, Orb } from "./ui/Hud";
+import {
+  CreateScreen, DeadScreen, GameCanvas,
+  InventoryPanel, LootPanel, LogPanel, MerchantPanel, MerchantOffer, PortalPanel, TitleScreen,
 } from "./ui/components";
 
 type Scene = "title" | "create" | "play" | "dead";
@@ -25,8 +30,8 @@ type OverlayKind = "inv" | "merchant" | "portal" | "loot" | null;
 // 经由函数返回值重新读取以获得联合类型。
 const phaseOf = (s: CombatState) => s.phase;
 
-const CANVAS_W = 640;
-const CANVAS_H = 416;
+const CANVAS_W = 800;
+const CANVAS_H = 450;
 
 export default function App() {
   const [scene, setScene] = useState<Scene>("title");
@@ -77,11 +82,13 @@ export default function App() {
     playerRef.current = p;
     spriteKeyRef.current = cls.sprite;
     floorRef.current = 1;
+    setDungeonTheme(1);
     rngRef.current = new Rng((Date.now() ^ 0x9e3779b9) >>> 0);
     mapRef.current = generateFloor(rngRef.current, 1);
     dungeonLogRef.current = [{ text: `你踏入了地牢。第 1 层, 建议 Lv${recLevel(1)}。`, kind: "info" }];
     clearSave();
     persist();
+    clearSceneFx();
     setOverlay(null);
     setScene("play");
     force();
@@ -93,9 +100,11 @@ export default function App() {
     playerRef.current = d.player;
     mapRef.current = d.map;
     floorRef.current = d.floor;
+    setDungeonTheme(d.floor);
     const cls = Object.values(CLASSES).find((c) => c.name === d.player.cls);
     spriteKeyRef.current = cls?.sprite ?? "hero_mage";
     dungeonLogRef.current = [{ text: `读档: ${d.player.cls} Lv${d.player.level}, 第 ${d.floor} 层。`, kind: "info" }];
+    clearSceneFx();
     setScene("play");
     force();
   };
@@ -114,9 +123,10 @@ export default function App() {
     const p = playerRef.current!;
     if (fromCamp) p.restUsed = false;
     floorRef.current = floor;
+    setDungeonTheme(floor);
     mapRef.current = generateFloor(rngRef.current, floor);
     const bossTag = isBossFloor(floor) ? " · 首领出没!" : "";
-    dlog(`—— 第 ${floor} 层 · 建议 Lv${recLevel(floor)}${bossTag}`, "loot");
+    dlog(`—— 第 ${floor} 层 · ${dungeonThemeName()} · 建议 Lv${recLevel(floor)}${bossTag}`, "loot");
     if (p.level < recLevel(floor)) dlog("! 你的等级低于建议值, 小心行事。", "damage");
     persist();
     force();
@@ -149,7 +159,15 @@ export default function App() {
     combatRef.current = null;
     lootQueueRef.current = res.drops;
     dlog(`战斗胜利! 掉落 ${res.gold} 金币, 获得 ${res.exp} 经验。`, "loot");
-    if (res.levels > 0) showToast(`✦ 升级! 等级 ${p.level}, 生命法力全满。`);
+    if (res.levels > 0) {
+      showToast(`✦ 升级! 等级 ${p.level}, 生命法力全满。`);
+      const [wx, wy] = worldToScreenCam(map.playerX, map.playerY);
+      fx.levelUp(wx, wy - 20);
+    }
+    if (res.drops.length) {
+      const [wx, wy] = worldToScreenCam(map.playerX, map.playerY);
+      fx.lootBeam(wx, wy);
+    }
     persist();
     if (res.drops.length) setOverlay("loot");
     force();
@@ -158,18 +176,46 @@ export default function App() {
   const onCombatAction = (action: Action) => {
     const state = combatRef.current;
     const p = playerRef.current;
-    if (!state || !p || state.phase !== "player") return;
+    if (!state || !p || phaseOf(state) !== "player") return;
+    // 目标在战斗画布上的位置(与 renderer 布局对齐)
+    const targetIdx = Math.max(0, state.monsters.findIndex((m) => m.hp > 0));
+    const px = CANVAS_W * 0.24;
+    const py = CANVAS_H * 0.74;
+    const tx = CANVAS_W * (0.56 + targetIdx * 0.09) + 36;
+    const ty = CANVAS_H * 0.74 - 44;
     const consumed = playerAction(state, p, rngRef.current, action);
     if (!consumed) { force(); return; }
+
+    if (action.kind === "attack" || action.kind === "skill") {
+      attackAnim();
+      const isCrit = state.log[state.log.length - 1]?.text.includes("(暴击!)") ?? false;
+      if (action.kind === "skill") {
+        if (p.cls === "灰烬法师") fx.flame(px + 40, py - 60, tx, ty);
+        else if (p.cls === "狂战士") fx.whirl(tx, ty);
+        else { fx.repairSpark(px + 40, py - 50); fx.heal(px + 40, py - 60); }
+      }
+      fx.hit(tx, ty);
+      if (isCrit) {
+        fx.crit(tx, ty);
+        shakeCam(9);
+        hitStopFx(0.05);
+      } else {
+        shakeCam(3.5);
+      }
+    } else if (action.kind === "potion" && action.which === "血瓶") {
+      fx.heal(px + 40, py - 60);
+    }
+
     if (phaseOf(state) === "won") { finishCombat(); return; }
     if (phaseOf(state) === "lost") { die(); return; }
-    // 敌方回合(稍作停顿再结算, 给演出留时间)
     force();
     enemyTimerRef.current = window.setTimeout(() => {
       const s = combatRef.current;
       if (!s) return;
+      const hpBefore = p.hp;
       const alive = enemyTurn(s, p, rngRef.current);
-      if (!alive) { die(); return; }
+      if (!alive) { shakeCam(11); die(); return; }
+      if (p.hp < hpBefore) shakeCam(6);
       if (phaseOf(s) === "won") { finishCombat(); return; }
       force();
     }, 420);
@@ -187,6 +233,7 @@ export default function App() {
   const onMove = (dx: number, dy: number) => {
     if (combatRef.current || overlay) return;
     const map = mapRef.current!;
+    faceDir(dx);
     const r = tryMovePlayer(map, dx, dy);
     if (r === "blocked") return;
     if (typeof r === "object") { startCombatWith(r.combat); return; }
@@ -213,8 +260,13 @@ export default function App() {
       const gold = (10 + floor * 5) * rngRef.current.int(2, 4);
       p.gold += gold;
       dlog(`满满一箱金币! 获得 ${gold} 金。`, "loot");
+      const [wx, wy] = worldToScreenCam(map.playerX, map.playerY);
+      addWorldFloat(map.playerX, map.playerY, `+${gold}金`, "#ffd23e");
+      fx.burst(wx, wy - 14, { colors: ["#ffd23e", "#fff3b0"], count: 16, speed: 140, life: 0.6 });
     } else if (r < 0.84) {
       dlog("箱底垫着一件装备……", "loot");
+      const [wx, wy] = worldToScreenCam(map.playerX, map.playerY);
+      fx.lootBeam(wx, wy - 10);
       lootQueueRef.current = [rollAt(floor + rngRef.current.int(2, 5))];
       setOverlay("loot");
       persist();
@@ -243,17 +295,22 @@ export default function App() {
     p.hp = Math.min(maxHp(p), p.hp + hpHeal);
     p.mp = Math.min(p.maxMp, p.mp + mpHeal);
     dlog(`清冽的泉水恢复了你 ${hpHeal} 点生命、${mpHeal} 点法力。`, "heal");
+    const [wx, wy] = worldToScreenCam(map.playerX, map.playerY);
+    fx.heal(wx, wy - 20);
     persist();
     force();
   };
 
   const restAtFire = () => {
     const p = playerRef.current!;
+    const map = mapRef.current!;
     if (p.restUsed) { dlog("这次营地的火已经烤过一遍了。", "info"); force(); return; }
     p.restUsed = true;
     p.hp = Math.min(maxHp(p), p.hp + Math.floor(maxHp(p) * 0.6));
     p.mp = Math.min(p.maxMp, p.mp + Math.floor(p.maxMp * 0.6));
     dlog("在篝火边休息片刻…… 生命法力大幅恢复。", "heal");
+    const [wx, wy] = worldToScreenCam(map.playerX, map.playerY);
+    fx.heal(wx, wy - 20);
     persist();
     force();
   };
@@ -384,10 +441,18 @@ export default function App() {
   };
 
   // ---------------- 键盘 ----------------
+  const keysDown = useRef(new Set<string>());
+  const lastMoveAt = useRef(0);
   useEffect(() => {
+    const DIR_KEYS: Record<string, string> = {
+      w: "w", arrowup: "w", s: "s", arrowdown: "s",
+      a: "a", arrowleft: "a", d: "d", arrowright: "d",
+    };
     const onKey = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
       if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(k)) e.preventDefault();
+      const dir = DIR_KEYS[k];
+      if (dir) { keysDown.current.add(dir); return; }
       if (scene === "play") {
         if (overlay === "loot") {
           if (k === "y") takeLoot();
@@ -407,16 +472,48 @@ export default function App() {
           else if (k === "4") onCombatAction({ kind: "potion", which: "蓝瓶" });
           return;
         }
-        if (k === "w" || k === "arrowup") onMove(0, -1);
-        else if (k === "s" || k === "arrowdown") onMove(0, 1);
-        else if (k === "a" || k === "arrowleft") onMove(-1, 0);
-        else if (k === "d" || k === "arrowright") onMove(1, 0);
-        else if (k === "e" || k === " ") onInteract();
+        if (k === "e" || k === " ") onInteract();
         else if (k === "i") { setOverlay("inv"); force(); }
       }
     };
+    const onKeyUp = (e: KeyboardEvent) => {
+      const dir = DIR_KEYS[e.key.toLowerCase()];
+      if (dir) keysDown.current.delete(dir);
+    };
+    const onBlur = () => keysDown.current.clear();
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    // 按住持续走: 轮询按键集合, 斜向时先试主轴再退副轴
+    const timer = window.setInterval(() => {
+      if (scene !== "play" || combatRef.current || overlay) return;
+      const dir = keysDown.current;
+      const dx = (dir.has("d") ? 1 : 0) - (dir.has("a") ? 1 : 0);
+      const dy = (dir.has("s") ? 1 : 0) - (dir.has("w") ? 1 : 0);
+      if (!dx && !dy) return;
+      const now = performance.now();
+      if (now - lastMoveAt.current < 130) return;
+      lastMoveAt.current = now;
+      if (dx && dy) {
+        faceDir(dx);
+        const r = tryMovePlayer(mapRef.current!, dx, 0);
+        if (typeof r === "object") { startCombatWith(r.combat); return; }
+        if (r === "moved") { afterPlayerAct(); return; }
+        // 主轴被挡, 试副轴
+        const r2 = tryMovePlayer(mapRef.current!, 0, dy);
+        if (typeof r2 === "object") { startCombatWith(r2.combat); return; }
+        if (r2 === "blocked") return;
+        afterPlayerAct();
+      } else {
+        onMove(dx, dy);
+      }
+    }, 40);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+      window.clearInterval(timer);
+    };
   });
 
   // ---------------- 绘制 ----------------
@@ -426,10 +523,9 @@ export default function App() {
     const p = playerRef.current;
     if (!map || !p) return;
     if (combatRef.current) {
-      const s = combatRef.current;
-      renderCombat(ctx, s, p, spriteKeyRef.current, p.hp, p.mp, maxHp(p), p.maxMp, dt);
+      renderCombat(ctx, combatRef.current, p, spriteKeyRef.current, p.hp, p.mp, maxHp(p), p.maxMp, dt);
     } else {
-      renderDungeon(ctx, map, p, spriteKeyRef.current);
+      renderDungeon(ctx, map, p, spriteKeyRef.current, dt);
     }
   };
 
@@ -480,39 +576,36 @@ export default function App() {
   const map = mapRef.current!;
   const combat = combatRef.current;
   const o = merchantRef.current;
+  const boss = combat?.monsters.find((m) => m.hp > 0);
   return (
     <div className="game-wrap">
-      <StatusHud player={p} />
+      <div className="hud-top">
+        <span className="hud-floor">
+          第 {floorRef.current} 层
+          {isBossFloor(floorRef.current) && <span className="hp-color"> · 首领!</span>}
+          {map.isCamp && <span className="heal"> · 营地</span>}
+        </span>
+        <div className="grow" style={{ textAlign: "center" }}>
+          {combat && boss ? (
+            <>
+              <BossBar name={`${boss.name}  ·  ${combat.round + 1}回合`} hp={boss.hp} maxHp={boss.maxHp} />
+            </>
+          ) : (
+            <span className="dim" style={{ fontSize: 12 }}>
+              <span className="kbd">WASD</span> 移动 · <span className="kbd">E</span> 交互 · <span className="kbd">I</span> 背包
+              {p.level < recLevel(floorRef.current) && <span className="hp-color"> · 等级低于建议值, 小心!</span>}
+            </span>
+          )}
+        </div>
+        <Minimap map={map} />
+      </div>
       <GameCanvas width={CANVAS_W} height={CANVAS_H} drawRef={drawRef} />
-      {combat ? (
-        <div className="panel">
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <CombatStatus state={combat} />
-            <span className="dim">
-              ❤{p.hp}/{maxHp(p)} ✦{p.mp}/{p.maxMp} ⚔{playerAtk(p)}
-            </span>
-          </div>
-          <CombatMenu player={p} onAction={onCombatAction} />
-          <div style={{ height: 8 }} />
-          <LogPanel log={combat.log} />
-        </div>
-      ) : (
-        <div className="panel">
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <span>
-              <span className="gold">—— 第 {floorRef.current} 层</span>
-              {" · "}建议 Lv{recLevel(floorRef.current)}
-              {isBossFloor(floorRef.current) && <span className="hp-color"> · 首领出没!</span>}
-              {map.isCamp && <span className="heal"> · 篝火营地</span>}
-            </span>
-            <span className="dim">
-              <span className="kbd">WASD</span> 移动 <span className="kbd">E</span> 交互 <span className="kbd">I</span> 背包
-            </span>
-          </div>
-          <div style={{ height: 8 }} />
-          <LogPanel log={dungeonLogRef.current} />
-        </div>
-      )}
+      <div className="hud-bottom">
+        <Orb value={p.hp} max={maxHp(p)} color="linear-gradient(#ff7a6b, #c22323)" glow="#ff4b4b" />
+        <ActionBar player={p} inCombat={!!combat} onAction={onCombatAction} />
+        <Orb value={p.mp} max={p.maxMp} color="linear-gradient(#5b9cff, #1c3f9a)" glow="#5b9cff" />
+      </div>
+      <LogPanel log={combat ? combat.log : dungeonLogRef.current} />
 
       {overlay === "inv" && (
         <InventoryPanel
