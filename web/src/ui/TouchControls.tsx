@@ -1,13 +1,14 @@
 import { useRef } from "react";
 import type { RefObject } from "react";
 
-/** 仅触屏设备渲染。左下虚拟摇杆(写 App 的 keysDown 集合, 复用连走 tick), 右下交互/背包钮。
+/** 仅触屏设备渲染。右下虚拟摇杆(写 App 的 keysDown 集合, 复用连走 tick), 左下交互/背包/技能钮。
  *  打开面板的按钮必须用 onClick(pointerup 后)触发 —— 用 pointerdown 会在面板渲染盖住
  *  按钮后, 把 click 落到遮罩上触发"点背景关闭", 造成面板一闪而过。 */
-export function TouchControls({ keysDown, onInteract, onToggleInv }: {
+export function TouchControls({ keysDown, onInteract, onToggleInv, onToggleSkill }: {
   keysDown: RefObject<Set<string>>;
   onInteract: () => void;
   onToggleInv: () => void;
+  onToggleSkill: () => void;
 }) {
   const joyRef = useRef<HTMLDivElement>(null);
   const knobRef = useRef<HTMLDivElement>(null);
@@ -78,6 +79,7 @@ export function TouchControls({ keysDown, onInteract, onToggleInv }: {
       <div className="tc-side" onContextMenu={stop}>
         <button className="tc-key tc-round" onClick={(e) => { e.stopPropagation(); onInteract(); }}>✋</button>
         <button className="tc-key tc-round" onClick={(e) => { e.stopPropagation(); onToggleInv(); }}>包</button>
+        <button className="tc-key tc-round" onClick={(e) => { e.stopPropagation(); onToggleSkill(); }}>技</button>
       </div>
     </div>
   );

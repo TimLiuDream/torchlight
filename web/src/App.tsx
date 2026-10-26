@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { CLASSES, EMPTY_LINES } from "./game/data";
-import { makeElite, maxHp, recLevel, rollEquipment } from "./game/player";
+import { createPlayer, learnSkillNode, makeElite, maxHp, recLevel, rollEquipment, spendStat } from "./game/player";
 import { Rng } from "./game/rng";
 import { clearSave, loadGame, saveGame } from "./game/save";
 import {
@@ -11,7 +11,7 @@ import {
   enemyTurn, playerAction, settleVictory, startCombat,
 } from "./game/combat";
 import type { Action } from "./game/combat";
-import type { CombatState, Equipment, FloorMap, LogLine, Monster, PlayerState } from "./game/types";
+import type { CombatState, Equipment, FloorMap, LogLine, Monster, PlayerState, SkillNode, StatKey } from "./game/types";
 import {
   addWorldFloat, attackAnim, clearSceneFx, combatAnchor, dungeonThemeName, faceDir, gameCanvasSize, hitStopFx, renderCombat, renderDungeon, setDungeonTheme, shakeCam,
   worldToScreenCam,
@@ -20,12 +20,12 @@ import * as fx from "./render/particles";
 import { ActionBar, BossBar, Minimap, Orb } from "./ui/Hud";
 import {
   CreateScreen, DeadScreen, GameCanvas,
-  InventoryPanel, LootPanel, LogPanel, MerchantPanel, MerchantOffer, PortalPanel, TitleScreen,
+  InventoryPanel, LootPanel, LogPanel, MerchantPanel, MerchantOffer, PortalPanel, SkillTreePanel, TitleScreen,
 } from "./ui/components";
 import { TouchControls } from "./ui/TouchControls";
 
 type Scene = "title" | "create" | "play" | "dead";
-type OverlayKind = "inv" | "merchant" | "portal" | "loot" | null;
+type OverlayKind = "inv" | "skill" | "merchant" | "portal" | "loot" | null;
 
 // playerAction/enemyTurn 会就地修改 state.phase, TS 的属性收窄看不到 mutation,
 // 经由函数返回值重新读取以获得联合类型。
@@ -77,12 +77,7 @@ export default function App() {
 
   const beginRun = (clsKey: string) => {
     const cls = CLASSES[clsKey];
-    const p: PlayerState = {
-      cls: cls.name, baseHp: cls.hp, baseAtk: cls.atk, maxMp: cls.mp,
-      skill: { ...cls.skill }, level: 1, exp: 0, hp: cls.hp, mp: cls.mp,
-      equip: { 武器: null, 护甲: null, 饰品: null },
-      bag: [], gold: 30, potions: { 血瓶: 2, 蓝瓶: 1 }, kills: 0, restUsed: false,
-    };
+    const p = createPlayer(cls);
     playerRef.current = p;
     spriteKeyRef.current = cls.sprite;
     floorRef.current = 1;
@@ -164,7 +159,7 @@ export default function App() {
     lootQueueRef.current = res.drops;
     dlog(`战斗胜利! 掉落 ${res.gold} 金币, 获得 ${res.exp} 经验。`, "loot");
     if (res.levels > 0) {
-      showToast(`✦ 升级! 等级 ${p.level}, 生命法力全满。`);
+      showToast(`✦ 升级! 等级 ${p.level} · 属性点+${res.levels * 3} 技能点+${res.levels} (I 背包 / K 技能树)`);
       const [wx, wy] = worldToScreenCam(map.playerX, map.playerY);
       fx.levelUp(wx, wy - 20);
     }
@@ -408,6 +403,18 @@ export default function App() {
   };
 
   // ---------------- 背包/掉落 ----------------
+  const onSpendStat = (key: StatKey) => {
+    const p = playerRef.current!;
+    if (spendStat(p, key)) { persist(); force(); }
+  };
+  const onLearnSkill = (node: SkillNode) => {
+    const p = playerRef.current!;
+    const err = learnSkillNode(p, node);
+    if (err) { showToast(err); return; }
+    dlog(`✦ 习得 ${node.name}!`, "loot");
+    persist(); force();
+  };
+
   const wearFromBag = (eq: Equipment) => {
     const p = playerRef.current!;
     const idx = p.bag.indexOf(eq);
@@ -467,6 +474,10 @@ export default function App() {
         }
         if (overlay === "merchant") { if (k === "escape") { setOverlay(null); force(); } return; }
         if (overlay === "portal") { if (k === "escape") { setOverlay(null); force(); } return; }
+        if (overlay === "skill") {
+          if (k === "k" || k === "escape") { setOverlay(null); force(); }
+          return;
+        }
         if (overlay === "inv") {
           if (k === "i" || k === "escape") { setOverlay(null); force(); }
           return;
@@ -480,6 +491,7 @@ export default function App() {
         }
         if (k === "e" || k === " ") onInteract();
         else if (k === "i") { setOverlay("inv"); force(); }
+        else if (k === "k") { setOverlay("skill"); force(); }
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -628,6 +640,15 @@ export default function App() {
           player={p}
           onWear={wearFromBag}
           onDrop={dropFromBag}
+          onSpendStat={onSpendStat}
+          onOpenSkillTree={() => { setOverlay("skill"); force(); }}
+          onClose={() => { setOverlay(null); force(); }}
+        />
+      )}
+      {overlay === "skill" && (
+        <SkillTreePanel
+          player={p}
+          onLearn={onLearnSkill}
           onClose={() => { setOverlay(null); force(); }}
         />
       )}
@@ -658,6 +679,7 @@ export default function App() {
         keysDown={keysDown}
         onInteract={onInteract}
         onToggleInv={() => { setOverlay(overlay === "inv" ? null : "inv"); force(); }}
+        onToggleSkill={() => { setOverlay(overlay === "skill" ? null : "skill"); force(); }}
       />
     </div>
   );

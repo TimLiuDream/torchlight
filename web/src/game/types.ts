@@ -2,11 +2,24 @@
 export type Rarity = "普通" | "魔法" | "稀有" | "传说";
 export type Slot = "武器" | "护甲" | "饰品";
 export type AffixKey = "atk" | "hp" | "crit" | "leech" | "regen";
+export type StatKey = "str" | "vit" | "mag" | "agi";
+
+// 主动技能行为类型(战斗结算按 kind 分派)
+export type SkillKind =
+  | "flame"      // 220% 单体 (法师基础)
+  | "whirl"      // 160% 必暴 (战士基础)
+  | "drone"      // 回25%血+80%伤 (工程师基础)
+  | "nova"       // 300% 单体
+  | "aoe"        // 180% 全体
+  | "leechWhirl" // 200% 必暴+吸血10%
+  | "healBig"    // 回50%血+60%伤
+  | "summon";    // 150% 全体
 
 export interface Skill {
   name: string;
   cost: number;
   desc: string;
+  kind?: SkillKind;
 }
 
 export interface ClassDef {
@@ -20,6 +33,7 @@ export interface ClassDef {
 
 export interface Equipment {
   slot: Slot;
+  kind: string; // 细类型(短剑/法杖/皮甲/戒指...), 标注用
   rarity: Rarity;
   atk: number;
   hp: number;
@@ -28,6 +42,7 @@ export interface Equipment {
   regen: number;
   name: string;
   value: number;
+  setId?: string; // 所属套装 id
 }
 
 export interface PlayerState {
@@ -46,6 +61,24 @@ export interface PlayerState {
   potions: { 血瓶: number; 蓝瓶: number };
   kills: number;
   restUsed: boolean;
+  // ---- 成长系统 ----
+  statPoints: number; // 未分配属性点
+  stats: Record<StatKey, number>; // 力量/体力/魔力/敏捷
+  skillPoints: number; // 未使用技能点
+  learned: string[]; // 已学技能树节点 id
+}
+
+// ---- 技能树节点 ----
+export interface SkillNode {
+  id: string;
+  name: string;
+  tier: 1 | 2 | 3;
+  type: "passive" | "active";
+  desc: string;
+  cost: number; // 技能点
+  // 被动效果(atkFlat/hpFlat 为扁平值, Pct 为百分比)
+  effect?: Partial<Record<"atkFlat" | "hpFlat" | "mpFlat" | "crit" | "leech" | "regen" | "atkPct" | "hpPct", number>>;
+  active?: Skill; // 主动: 学后替换职业技
 }
 
 export interface Monster {

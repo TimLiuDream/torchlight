@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
-import { affixText } from "../game/player";
+import { useEffect, useRef, useState } from "react";
+import { affixText, maxHp, playerAtk, playerCrit, playerLeech, playerRegen, setBonuses } from "../game/player";
+import { SETS, SKILL_TREES, STAT_BONUS } from "../game/data";
 import { sprite } from "../render/sprites";
 import { tex, texReady, frame } from "../render/atlas";
-import type { ClassDef, CombatState, Equipment, LogLine, PlayerState } from "../game/types";
+import type { ClassDef, CombatState, Equipment, LogLine, PlayerState, SkillNode, StatKey } from "../game/types";
 
 // 职业精灵 -> 0x72 动画基名(与 renderer HERO_ANIM 一致)
 const HERO_FRAME: Record<string, string> = {
@@ -224,10 +225,12 @@ export function LogPanel({ log }: { log: LogLine[] }) {
 }
 
 export function EquipLine({ eq }: { eq: Equipment }) {
+  const setName = eq.setId ? SETS[eq.setId]?.name : null;
   return (
     <span className={`r-${rarityClass(eq.rarity)}`}>
       [{eq.rarity}]{eq.name}
-      <span className="dim"> ({affixText(eq)})</span>
+      <span className="dim"> ({eq.slot}·{eq.kind}, {affixText(eq)})</span>
+      {setName && <span className="set-name"> 〔套装:{setName}〕</span>}
     </span>
   );
 }
@@ -235,15 +238,61 @@ const rarityClass = (r: string) =>
   r === "传说" ? "legend" : r === "稀有" ? "rare" : r === "魔法" ? "magic" : "normal";
 
 // ---------------- 背包 ----------------
-export function InventoryPanel({ player, onWear, onDrop, onClose }: {
+const STAT_NAMES: Record<StatKey, string> = { str: "力量", vit: "体力", mag: "魔力", agi: "敏捷" };
+const STAT_DESC: Record<StatKey, string> = {
+  str: `攻击 +${STAT_BONUS.str.atk}/点`,
+  vit: `生命 +${STAT_BONUS.vit.hp}/点`,
+  mag: `法力 +${STAT_BONUS.mag.mp}/点`,
+  agi: `暴击 +${STAT_BONUS.agi.crit}%/点`,
+};
+
+export function InventoryPanel({ player, onWear, onDrop, onSpendStat, onOpenSkillTree, onClose }: {
   player: PlayerState;
   onWear: (eq: Equipment) => void;
   onDrop: (eq: Equipment) => void;
+  onSpendStat: (key: StatKey) => void;
+  onOpenSkillTree: () => void;
   onClose: () => void;
 }) {
+  const sets = setBonuses(player);
   return (
     <Overlay onClose={onClose}>
       <h3>背包 {player.bag.length}/10</h3>
+
+      <div className="stat-block">
+        <div className="row">
+          <strong className="gold">属性点 {player.statPoints}</strong>
+          <button className="stat-tree-btn" onClick={onOpenSkillTree}>技能树 (K)</button>
+          <span className="dim" style={{ fontSize: 12 }}>技能点 {player.skillPoints}</span>
+        </div>
+        {(["str", "vit", "mag", "agi"] as const).map((key) => (
+          <div className="item-line stat-line" key={key}>
+            <button
+              onClick={() => onSpendStat(key)}
+              disabled={player.statPoints <= 0}
+              title={STAT_DESC[key]}
+            >+</button>
+            <span>{STAT_NAMES[key]} <strong>{player.stats[key]}</strong></span>
+            <span className="dim" style={{ fontSize: 11 }}>{STAT_DESC[key]}</span>
+          </div>
+        ))}
+        <div className="dim" style={{ fontSize: 12 }}>
+          攻击 {playerAtk(player)} · 生命 {maxHp(player)} · 暴击 {playerCrit(player)}% · 吸血 {playerLeech(player)}% · 回蓝 {playerRegen(player)}
+        </div>
+      </div>
+
+      {sets.lines.length > 0 && (
+        <div className="set-block">
+          {sets.lines.map((l) => (
+            <div key={l.name} className="item-line">
+              <span className="set-name">〔{l.name} {l.count}/{l.need}〕</span>
+              <span className="dim" style={{ fontSize: 12 }}>{l.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <hr style={{ border: "none", borderTop: `1px solid var(--line)`, margin: "8px 0" }} />
       {(["武器", "护甲", "饰品"] as const).map((slot) => (
         <div className="item-line" key={slot}>
           <span className="dim">已穿[{slot}]:</span>{" "}
@@ -261,6 +310,60 @@ export function InventoryPanel({ player, onWear, onDrop, onClose }: {
       ))}
       <div className="row" style={{ marginTop: 10 }}>
         <button onClick={onClose}>关闭 (I)</button>
+      </div>
+    </Overlay>
+  );
+}
+
+// ---------------- 技能树 ----------------
+export function SkillTreePanel({ player, onLearn, onClose }: {
+  player: PlayerState;
+  onLearn: (node: SkillNode) => void;
+  onClose: () => void;
+}) {
+  const [, force] = useState(0);
+  const tree = SKILL_TREES[player.cls] ?? [];
+  const tiers: Array<typeof tree> = [[], [], []];
+  for (const n of tree) tiers[n.tier - 1].push(n);
+  const unlocked = (tier: number) => tier === 1 || player.learned.some((id) => tree.find((n) => n.id === id)?.tier === tier - 1);
+  return (
+    <Overlay onClose={onClose}>
+      <h3>技能树 · {player.cls}</h3>
+      <div className="dim" style={{ marginBottom: 8 }}>
+        技能点 <span className="gold">{player.skillPoints}</span> · 学习下层需先学上层至少 1 项
+      </div>
+      {tiers.map((nodes, i) => (
+        <div key={i} className="tier-block">
+          <div className="dim" style={{ fontSize: 12, margin: "4px 0" }}>— 第 {i + 1} 层 —</div>
+          <div className="skill-grid">
+            {nodes.map((node) => {
+              const learned = player.learned.includes(node.id);
+              const canLearn = !learned && unlocked(node.tier) && player.skillPoints >= node.cost;
+              return (
+                <div key={node.id} className={`skill-card ${learned ? "learned" : canLearn ? "can" : "locked"}`}>
+                  <div className="row" style={{ justifyContent: "space-between" }}>
+                    <strong>{node.name}</strong>
+                    <span className="dim" style={{ fontSize: 11 }}>{node.type === "active" ? "主动" : "被动"} · {node.cost}点</span>
+                  </div>
+                  <div className="dim" style={{ fontSize: 12 }}>{node.desc}</div>
+                  {!learned && (
+                    <button
+                      className="primary"
+                      disabled={!canLearn}
+                      onClick={() => { onLearn(node); force((x) => x + 1); }}
+                      style={{ marginTop: 6, width: "100%" }}
+                    >
+                      {learned ? "已学习" : unlocked(node.tier) ? (canLearn ? "学习" : "技能点不足") : "需先学上层"}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      <div className="row" style={{ marginTop: 10 }}>
+        <button onClick={onClose}>关闭 (Esc)</button>
       </div>
     </Overlay>
   );

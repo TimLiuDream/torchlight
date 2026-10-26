@@ -71,16 +71,54 @@ export function playerAction(state: CombatState, player: PlayerState, rng: Rng, 
       return false;
     }
     player.mp -= player.skill.cost;
-    if (player.cls === "灰烬法师") {
-      dealDamage(state, player, target, Math.floor(playerAtk(player) * 2.2), false);
-    } else if (player.cls === "狂战士") {
-      dealDamage(state, player, target, Math.floor(playerAtk(player) * 1.6), true);
-    } else {
-      const heal = Math.floor(maxHp(player) / 4);
-      player.hp = Math.min(maxHp(player), player.hp + heal);
-      log(state, `无人机修理了你的装甲, 回复 ${heal} 点。`, "heal");
-      state.floats.push({ text: `+${heal}`, x: 0.28, y: 0.42, color: "#4ade80", t: 1.0 });
-      dealDamage(state, player, target, Math.floor(playerAtk(player) * 0.8), false);
+    const atk = playerAtk(player);
+    switch (player.skill.kind) {
+      case "whirl": {
+        // 必暴
+        dealDamage(state, player, target, Math.floor(atk * 1.6 * 2), true);
+        break;
+      }
+      case "drone": {
+        const heal = Math.floor(maxHp(player) / 4);
+        player.hp = Math.min(maxHp(player), player.hp + heal);
+        log(state, `无人机修理了你的装甲, 回复 ${heal} 点。`, "heal");
+        state.floats.push({ text: `+${heal}`, x: 0.28, y: 0.42, color: "#4ade80", t: 1.0 });
+        dealDamage(state, player, target, Math.floor(atk * 0.8), false);
+        break;
+      }
+      case "nova": {
+        dealDamage(state, player, target, Math.floor(atk * 3), false);
+        break;
+      }
+      case "aoe":
+      case "summon": {
+        const mult = player.skill.kind === "aoe" ? 1.8 : 1.5;
+        for (const m of livingTargets(state)) {
+          dealDamage(state, player, m, Math.floor(atk * mult * rng.uniform(0.95, 1.05)), false);
+        }
+        log(state, `${player.skill.name} 覆盖了全部敌人!`, "damage");
+        break;
+      }
+      case "leechWhirl": {
+        const dmg = Math.floor(atk * 2);
+        dealDamage(state, player, target, dmg, true);
+        const heal = Math.max(1, Math.floor(dmg * 0.1));
+        player.hp = Math.min(maxHp(player), player.hp + heal);
+        log(state, `  嗜血吸取 ${heal} 点。`, "heal");
+        break;
+      }
+      case "healBig": {
+        const heal = Math.floor(maxHp(player) / 2);
+        player.hp = Math.min(maxHp(player), player.hp + heal);
+        log(state, `纳米修复回复了 ${heal} 点。`, "heal");
+        state.floats.push({ text: `+${heal}`, x: 0.28, y: 0.42, color: "#4ade80", t: 1.0 });
+        dealDamage(state, player, target, Math.floor(atk * 0.6), false);
+        break;
+      }
+      default: {
+        // flame
+        dealDamage(state, player, target, Math.floor(atk * 2.2), false);
+      }
     }
   } else {
     if (player.potions[action.which] <= 0) {

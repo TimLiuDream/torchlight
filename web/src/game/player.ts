@@ -1,6 +1,9 @@
-import { AFFIX_N, LEGEND_NAMES, M_BODY, M_PREFIX, PREFIXES, RARITY_MULT } from "./data";
+import {
+  AFFIX_N, LEGEND_NAMES, M_BODY, M_PREFIX, PREFIXES, RARITY_MULT,
+  SETS, SET_DROP_CHANCE, SKILL_TREES, STAT_BONUS, STAT_POINTS_PER_LEVEL, SKILL_POINTS_PER_LEVEL,
+} from "./data";
 import type { Rng } from "./rng";
-import type { AffixKey, ClassDef, Equipment, Monster, PlayerState, Rarity, Slot } from "./types";
+import type { AffixKey, ClassDef, Equipment, Monster, PlayerState, Rarity, Slot, SkillNode } from "./types";
 
 // ---------------- 装备 ----------------
 const AFFIX_KEYS: AffixKey[] = ["atk", "hp", "crit", "leech", "regen"];
@@ -21,7 +24,7 @@ export function rollEquipment(rng: Rng, floor: number, forceRarity?: Rarity): Eq
   }
 
   const scale = RARITY_MULT[rarity] * (1 + floor * 0.12);
-  const eq: Equipment = { slot, rarity, atk: 0, hp: 0, crit: 0, leech: 0, regen: 0, name: "", value: 0 };
+  const eq: Equipment = { slot, kind: "", rarity, atk: 0, hp: 0, crit: 0, leech: 0, regen: 0, name: "", value: 0 };
 
   let base: string;
   if (slot === "武器") {
@@ -38,6 +41,7 @@ export function rollEquipment(rng: Rng, floor: number, forceRarity?: Rarity): Eq
     else if (main === "regen") eq.regen = rng.int(1, 3);
     else eq.atk = Math.max(1, Math.floor(rng.int(2, 5) * scale));
   }
+  eq.kind = base;
 
   // 词缀: 从主属性之外的池子里抽
   const pool = AFFIX_KEYS.filter((k) => eq[k] === 0);
@@ -50,10 +54,14 @@ export function rollEquipment(rng: Rng, floor: number, forceRarity?: Rarity): Eq
     else eq.regen += rng.int(1, 2);
   }
 
-  if (rarity === "传说") eq.name = `${LEGEND_NAMES[slot]}·${base}`;
+  // 套装件: 稀有/传说有概率成为套装件(名字换为套装名)
+  if ((rarity === "稀有" || rarity === "传说") && rng.next() < SET_DROP_CHANCE[rarity]) {
+    eq.setId = rng.pick(Object.keys(SETS));
+    eq.name = `${SETS[eq.setId].name}·${base}`;
+  } else if (rarity === "传说") eq.name = `${LEGEND_NAMES[slot]}·${base}`;
   else if (rarity === "普通") eq.name = base;
   else eq.name = rng.pick(PREFIXES) + base;
-  eq.value = Math.floor((10 + floor * 6) * RARITY_MULT[rarity]);
+  eq.value = Math.floor((10 + floor * 6) * RARITY_MULT[rarity] * (eq.setId ? 1.3 : 1));
   return eq;
 }
 
@@ -123,24 +131,98 @@ export function createPlayer(cls: ClassDef): PlayerState {
     potions: { 血瓶: 2, 蓝瓶: 1 },
     kills: 0,
     restUsed: false,
+    statPoints: 0,
+    stats: { str: 0, vit: 0, mag: 0, agi: 0 },
+    skillPoints: 0,
+    learned: [],
   };
 }
 
+// ---------------- 套装/技能树被动聚合 ----------------
 export function equipSum(p: PlayerState, key: AffixKey): number {
   let s = 0;
   for (const e of Object.values(p.equip)) if (e) s += e[key];
   return s;
 }
 
-export const maxHp = (p: PlayerState) => Math.floor(p.baseHp * (1 + (p.level - 1) * 0.15)) + equipSum(p, "hp");
-export const playerAtk = (p: PlayerState) => Math.floor(p.baseAtk * (1 + (p.level - 1) * 0.12)) + equipSum(p, "atk");
-export const playerCrit = (p: PlayerState) => 5 + equipSum(p, "crit");
-export const playerLeech = (p: PlayerState) => equipSum(p, "leech");
-export const playerRegen = (p: PlayerState) => equipSum(p, "regen");
+export interface SetBonusState {
+  atkPct: number;
+  hpPct: number;
+  atkFlat: number;
+  hpFlat: number;
+  crit: number;
+  leech: number;
+  regen: number;
+  // 已激活套装描述(供 UI)
+  lines: Array<{ name: string; text: string; count: number; need: number }>;
+}
+
+const emptyBonus = (): SetBonusState => ({ atkPct: 0, hpPct: 0, atkFlat: 0, hpFlat: 0, crit: 0, leech: 0, regen: 0, lines: [] });
+
+export function setBonuses(p: PlayerState): SetBonusState {
+  const st = emptyBonus();
+  const count: Record<string, number> = {};
+  for (const e of Object.values(p.equip)) {
+    if (e?.setId) count[e.setId] = (count[e.setId] ?? 0) + 1;
+  }
+  for (const [id, n] of Object.entries(count)) {
+    const set = SETS[id];
+    if (!set || n < 2) {
+      if (set && n === 1) st.lines.push({ name: set.name, text: "再集 1 件激活套装效果", count: 1, need: 2 });
+      continue;
+    }
+    const b = n >= 3 ? { ...set.bonus2, ...set.bonus3 } : set.bonus2;
+    st.atkPct += b.atkPct ?? 0;
+    st.hpPct += b.hpPct ?? 0;
+    st.crit += b.crit ?? 0;
+    st.leech += b.leech ?? 0;
+    st.regen += b.regen ?? 0;
+    st.lines.push({ name: set.name, text: n >= 3 ? set.desc3 : set.desc2, count: n, need: 3 });
+  }
+  return st;
+}
+
+/** 已学技能树被动聚合 */
+export function learnedBonus(p: PlayerState): SetBonusState {
+  const st = emptyBonus();
+  const all = Object.values(SKILL_TREES).flat();
+  for (const id of p.learned) {
+    const node = all.find((n) => n.id === id);
+    if (!node?.effect) continue;
+    st.atkPct += node.effect.atkPct ?? 0;
+    st.hpPct += node.effect.hpPct ?? 0;
+    st.atkFlat += node.effect.atkFlat ?? 0;
+    st.hpFlat += node.effect.hpFlat ?? 0;
+    st.crit += node.effect.crit ?? 0;
+    st.leech += node.effect.leech ?? 0;
+    st.regen += node.effect.regen ?? 0;
+  }
+  return st;
+}
+
+function nodeById(id: string): SkillNode | undefined {
+  return Object.values(SKILL_TREES).flat().find((n) => n.id === id);
+}
+
+// ---------------- 属性公式(加点 + 装备 + 套装 + 被动) ----------------
+export const maxHp = (p: PlayerState) => {
+  const set = setBonuses(p), lb = learnedBonus(p);
+  const flat = p.baseHp * (1 + (p.level - 1) * 0.15) + equipSum(p, "hp") + p.stats.vit * STAT_BONUS.vit.hp + lb.hpFlat;
+  return Math.floor(flat * (1 + set.hpPct + lb.hpPct));
+};
+export const playerAtk = (p: PlayerState) => {
+  const set = setBonuses(p), lb = learnedBonus(p);
+  const flat = p.baseAtk * (1 + (p.level - 1) * 0.12) + equipSum(p, "atk") + p.stats.str * STAT_BONUS.str.atk + lb.atkFlat;
+  return Math.floor(flat * (1 + set.atkPct + lb.atkPct));
+};
+export const playerCrit = (p: PlayerState) =>
+  Math.floor(5 + equipSum(p, "crit") + p.stats.agi * STAT_BONUS.agi.crit + setBonuses(p).crit + learnedBonus(p).crit);
+export const playerLeech = (p: PlayerState) => equipSum(p, "leech") + setBonuses(p).leech + learnedBonus(p).leech;
+export const playerRegen = (p: PlayerState) => equipSum(p, "regen") + setBonuses(p).regen + learnedBonus(p).regen;
 export const expNeed = (p: PlayerState) => p.level * 30;
 export const recLevel = (floor: number) => Math.max(1, Math.floor(floor / 2));
 
-/** 升级检查, 返回升了几级(供 UI 提示)。升级回满血蓝。 */
+/** 升级检查, 返回升了几级(供 UI 提示)。升级回满血蓝, 并发放成长点。 */
 export function gainExp(p: PlayerState, exp: number): number {
   p.exp += exp;
   let leveled = 0;
@@ -150,10 +232,37 @@ export function gainExp(p: PlayerState, exp: number): number {
     leveled += 1;
   }
   if (leveled) {
+    p.statPoints += leveled * STAT_POINTS_PER_LEVEL;
+    p.skillPoints += leveled * SKILL_POINTS_PER_LEVEL;
     p.hp = maxHp(p);
     p.mp = p.maxMp;
   }
   return leveled;
+}
+
+/** 分配属性点(mag 直接加到 maxMp 上, 其余走公式)。返回 false 表示点数不足。 */
+export function spendStat(p: PlayerState, key: "str" | "vit" | "mag" | "agi"): boolean {
+  if (p.statPoints <= 0) return false;
+  p.statPoints -= 1;
+  p.stats[key] += 1;
+  if (key === "mag") p.maxMp += STAT_BONUS.mag.mp;
+  if (key === "vit") p.hp = Math.min(maxHp(p), p.hp + STAT_BONUS.vit.hp);
+  return true;
+}
+
+/** 学习技能树节点。返回 null=成功, 否则为失败原因。 */
+export function learnSkillNode(p: PlayerState, node: SkillNode): string | null {
+  if (p.learned.includes(node.id)) return "已学习";
+  if (p.skillPoints < node.cost) return "技能点不足";
+  // 层级解锁: 学 tier n 需已学至少 1 个 tier n-1 节点
+  if (node.tier > 1 && !p.learned.some((id) => nodeById(id)?.tier === node.tier - 1)) {
+    return `需要先学习 ${node.tier - 1} 层技能`;
+  }
+  p.skillPoints -= node.cost;
+  p.learned.push(node.id);
+  if (node.active) p.skill = { ...node.active };
+  p.hp = Math.min(p.hp, maxHp(p));
+  return null;
 }
 
 /** 穿装备, 返回换下的旧装备。hp 超上限收拢。 */
