@@ -391,14 +391,38 @@ button.primary:hover:not(:disabled) { background: #2a2410; }
     pointer-events: none;
     z-index: 5;
   }
-  .tc-dpad {
+  .tc-joy {
     position: absolute;
-    left: 14px;
-    bottom: 14px;
-    display: grid;
-    grid-template-columns: repeat(3, 54px);
-    grid-template-rows: repeat(3, 54px);
-    gap: 2px;
+    left: 16px;
+    bottom: 18px;
+    width: 132px;
+    height: 132px;
+    border-radius: 50%;
+    background: rgba(20, 16, 30, 0.4);
+    border: 2px solid rgba(120, 110, 170, 0.5);
+    pointer-events: auto;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .tc-knob {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 54px;
+    height: 54px;
+    border-radius: 50%;
+    background: rgba(96, 84, 152, 0.8);
+    border: 2px solid rgba(160, 148, 220, 0.6);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+  .tc-side {
+    position: absolute;
+    right: 16px;
+    bottom: 28px;
+    display: flex;
+    gap: 10px;
     pointer-events: auto;
     touch-action: none;
   }
@@ -406,31 +430,16 @@ button.primary:hover:not(:disabled) { background: #2a2410; }
     border: 2px solid rgba(120, 110, 170, 0.55);
     background: rgba(20, 16, 30, 0.55);
     color: #cfc8ee;
-    border-radius: 10px;
-    font-size: 17px;
+    border-radius: 50%;
+    font-size: 15px;
     padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
     user-select: none;
     -webkit-user-select: none;
     -webkit-tap-highlight-color: transparent;
     touch-action: none;
   }
   .tc-key:active { border-color: var(--gold); color: var(--gold); background: rgba(60, 50, 30, 0.6); }
-  .tc-up { grid-area: 1 / 2; }
-  .tc-left { grid-area: 2 / 1; }
-  .tc-center { grid-area: 2 / 2; font-size: 15px; }
-  .tc-right { grid-area: 2 / 3; }
-  .tc-down { grid-area: 3 / 2; }
-  .tc-side {
-    position: absolute;
-    right: 14px;
-    bottom: 24px;
-    pointer-events: auto;
-    touch-action: none;
-  }
-  .tc-inv { width: 64px; height: 64px; border-radius: 50%; font-size: 14px; }
+  .tc-round { width: 60px; height: 60px; }
 }
 
 /* ---- 小屏适配 ---- */
