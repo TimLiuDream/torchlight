@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { affixText } from "../game/player";
 import { sprite } from "../render/sprites";
-import { tex, texReady } from "../render/atlas";
+import { tex, texReady, frame } from "../render/atlas";
 import type { ClassDef, CombatState, Equipment, LogLine, PlayerState } from "../game/types";
 
 // 职业精灵 -> 0x72 动画基名(与 renderer HERO_ANIM 一致)
@@ -10,6 +10,90 @@ const HERO_FRAME: Record<string, string> = {
   hero_berserker: "knight_m_idle_anim_f0",
   hero_engineer: "elf_m_idle_anim_f0",
 };
+
+/** 标题画面动态地牢横幅: 0x72 墙面/火把/怪物/走动的主角 */
+export function TitleBackdrop() {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const cv = ref.current;
+    if (!cv) return;
+    const ctx = cv.getContext("2d")!;
+    let raf = 0;
+    let cancelled = false;
+    const T = 48;
+    const COLS = 19;
+    const ROWS = 4;
+    const draw = (now: number) => {
+      if (cancelled) return;
+      const t = now / 1000;
+      ctx.imageSmoothingEnabled = false;
+      ctx.fillStyle = "#08060e";
+      ctx.fillRect(0, 0, cv.width, cv.height);
+      // 顶排墙顶 + 立面排 + 两行地板
+      for (let y = 0; y < ROWS; y++) {
+        for (let x = 0; x < COLS; x++) {
+          const sx = x * T;
+          const sy = y * T;
+          const wallTop = tex("wall_top_mid");
+          const wallFace = tex("wall_mid");
+          const floor = tex(`floor_${1 + ((x * 7 + y * 13) % 8)}`);
+          if (y === 0 && wallTop) ctx.drawImage(wallTop, sx, sy, T, T);
+          else if (y === 1 && wallFace) ctx.drawImage(wallFace, sx, sy, T, T);
+          else if (y >= 2 && floor) ctx.drawImage(floor, sx, sy, T, T);
+        }
+      }
+      // 火把与旗子
+      for (const x of [1, 5, 9, 13, 17]) {
+        const cx = x * T + T / 2;
+        ctx.fillStyle = "#5a3a1e";
+        ctx.fillRect(cx - 1, T + 6, 3, 8);
+        const sway = Math.sin(t * 6 + x) * 1.2;
+        ctx.fillStyle = "#ff6b2e";
+        ctx.fillRect(cx - 2 + sway * 0.5, T, 5, 6);
+        ctx.fillStyle = "#ffa03e";
+        ctx.fillRect(cx - 1 + sway * 0.7, T + 1, 4, 4);
+        ctx.fillStyle = "#fff8d8";
+        ctx.fillRect(cx + sway, T + 2, 2, 3);
+      }
+      for (const x of [3, 11, 15]) {
+        const img = tex(x === 11 ? "wall_banner_red" : "wall_banner_blue");
+        if (img) ctx.drawImage(img, x * T + T / 2 - 12, T + 8, 24, 24);
+      }
+      // 怪物(两侧 idle)
+      for (const [name, bx] of [["skelet_idle", 2.5], ["goblin_idle", 6.5], ["masked_orc_idle", 12.5], ["muddy_idle", 16.5]] as const) {
+        const img = frame(name, Math.floor(t * 5) % 4);
+        if (img) {
+          const w = img.width * 3;
+          const h = img.height * 3;
+          ctx.drawImage(img, bx * T - w / 2, 3 * T + T - h + 8, w, h);
+        }
+      }
+      // 主角往返走动
+      const span = (COLS - 4) * T;
+      const px = 2.5 * T + ((t * 46) % span);
+      const dir = Math.floor((t * 46) / span) % 2 === 0 ? 1 : -1;
+      const run = frame(dir === 1 ? "wizzard_m_run" : "wizzard_m_run", Math.floor(t * 8) % 4);
+      const idle = frame("wizzard_m_idle", Math.floor(t * 5) % 4);
+      const img = run ?? idle;
+      if (img) {
+        const w = img.width * 3;
+        const h = img.height * 3;
+        ctx.save();
+        ctx.translate(px, 3 * T + T + 8);
+        ctx.scale(dir, 1);
+        ctx.drawImage(img, -w / 2, -h, w, h);
+        ctx.restore();
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    let started = false;
+    const start = () => { if (!started && !cancelled) { started = true; raf = requestAnimationFrame(draw); } };
+    start();
+    texReady.then(start);
+    return () => { cancelled = true; cancelAnimationFrame(raf); };
+  }, []);
+  return <canvas ref={ref} className="pixel" width={19 * 48} height={4 * 48} style={{ width: "100%", imageRendering: "pixelated" }} />;
+}
 
 // ---------------- 基础 ----------------
 export function Bar({ ratio, color }: { ratio: number; color: string }) {
@@ -284,12 +368,15 @@ export function TitleScreen({ hasSave, saveInfo, onContinue, onNew }: {
   return (
     <div className="title-screen">
       <h1>火 炬 之 光</h1>
-      <div className="dim" style={{ marginBottom: 24 }}>像素版 · 暗黑系刷宝 roguelite · 下潜越深, 怪越强, 掉落越好</div>
-      <div className="row" style={{ justifyContent: "center", gap: 12 }}>
+      <div className="dim" style={{ marginBottom: 16 }}>像素版 · 暗黑系刷宝 roguelite · 下潜越深, 怪越强, 掉落越好</div>
+      <div className="title-backdrop">
+        <TitleBackdrop />
+      </div>
+      <div className="row" style={{ justifyContent: "center", gap: 12, marginTop: 16 }}>
         {hasSave && <button className="primary" onClick={onContinue}>继续冒险 ({saveInfo})</button>}
         <button onClick={onNew} className={hasSave ? "" : "primary"}>新的冒险</button>
       </div>
-      <div className="dim" style={{ marginTop: 30, fontSize: 12 }}>
+      <div className="dim" style={{ marginTop: 24, fontSize: 12 }}>
         <span className="kbd">WASD/方向键</span> 移动 · <span className="kbd">E</span> 交互 · <span className="kbd">I</span> 背包 · <span className="kbd">1-4</span> 战斗行动
       </div>
     </div>

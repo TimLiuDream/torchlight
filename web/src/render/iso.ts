@@ -83,30 +83,31 @@ export function drawFloorTile(ctx: CanvasRenderingContext2D, gx: number, gy: num
   _ctx = null;
 }
 
-/** 墙格: face(下邻是地板)画立面, 否则画顶部; 按左右邻居选角件 */
+/** 墙格: face(下邻是地板)画正常亮度砖面, 内部画压暗砖面 —— 无透明悬空 */
 export function drawWallBlock(
   ctx: CanvasRenderingContext2D, gx: number, gy: number, sx: number, sy: number,
-  visible: boolean, isFloorBelow: boolean, wallLeft: boolean, wallRight: boolean,
+  visible: boolean, isFloorBelow: boolean,
 ): void {
   _ctx = ctx;
-  let key: string;
-  if (isFloorBelow) {
-    key = "wall_mid";
-  } else if (!wallLeft) {
-    key = "wall_top_left";
-  } else if (!wallRight) {
-    key = "wall_top_right";
-  } else {
-    key = "wall_top_mid";
-  }
   ctx.save();
-  if (!visible) ctx.filter = "brightness(0.42)";
-  if (!blit(key, sx, sy)) {
-    ctx.fillStyle = visible ? "#2a2440" : "#161327";
-    ctx.fillRect(sx, sy, TW, TH);
+  if (!visible) ctx.filter = "brightness(0.5)";
+  if (isFloorBelow) {
+    // 朝向地板的墙: 正常亮度砖面
+    if (!blit("wall_mid", sx, sy)) {
+      ctx.fillStyle = "#2a2440";
+      ctx.fillRect(sx, sy, TW, TH);
+    }
+  } else {
+    // 墙体内部: 同贴图满格砖面 + 压暗, 彻底消除 0x72 top 贴图透明区造成的悬空砖带
+    if (blit("wall_mid", sx, sy)) {
+      ctx.fillStyle = "rgba(8,6,18,0.5)";
+      ctx.fillRect(sx, sy, TW, TH);
+    } else {
+      ctx.fillStyle = "#181428";
+      ctx.fillRect(sx, sy, TW, TH);
+    }
+    if (hash2(gx * 31, gy * 57) < 0.04) blit(hash2(gx, gy) < 0.5 ? "wall_hole_1" : "wall_hole_2", sx, sy);
   }
-  // 顶面少量破洞装饰
-  if (!isFloorBelow && hash2(gx * 31, gy * 57) < 0.05) blit(hash2(gx, gy) < 0.5 ? "wall_hole_1" : "wall_hole_2", sx, sy);
   ctx.restore();
   _ctx = null;
 }

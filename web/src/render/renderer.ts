@@ -43,6 +43,7 @@ export function clearSceneFx(): void {
   worldFloats.length = 0;
   monIp.clear();
   prInit = false;
+  combatAlive.clear();
 }
 
 /** 记录移动朝向并触发走路弹跳 */
@@ -55,11 +56,11 @@ export function faceDir(dx: number): void {
 export { setDungeonTheme, dungeonThemeName };
 
 // ---------------- 0x72 精灵映射 ----------------
-// 职业(spriteKey 来自 game/data) -> 动画基名
-const HERO_ANIM: Record<string, { idle: string; run: string; hit: string }> = {
-  hero_mage: { idle: "wizzard_m_idle", run: "wizzard_m_run", hit: "wizzard_m_hit" },
-  hero_berserker: { idle: "knight_m_idle", run: "knight_m_run", hit: "knight_m_hit" },
-  hero_engineer: { idle: "elf_m_idle", run: "elf_m_run", hit: "elf_m_hit" },
+// 职业(spriteKey 来自 game/data) -> 动画基名 + 手持武器
+const HERO_ANIM: Record<string, { idle: string; run: string; hit: string; weapon: string }> = {
+  hero_mage: { idle: "wizzard_m_idle", run: "wizzard_m_run", hit: "wizzard_m_hit", weapon: "weapon_red_magic_staff" },
+  hero_berserker: { idle: "knight_m_idle", run: "knight_m_run", hit: "knight_m_hit", weapon: "weapon_knight_sword" },
+  hero_engineer: { idle: "elf_m_idle", run: "elf_m_run", hit: "elf_m_hit", weapon: "weapon_big_hammer" },
 };
 // 怪物 body(来自 game/data) -> 动画基名(idle / run 可选)
 const MON_ANIM: Record<string, { idle: string; run?: string }> = {
@@ -91,6 +92,24 @@ function blitActor(
   ctx.drawImage(img, Math.round(-w / 2), Math.round(-h), Math.round(w), Math.round(h));
   ctx.restore();
   return true;
+}
+
+/** 手持武器(0x72 weapon 帧): 柄底为轴, swing 1=高举 0=落下。scale 为精灵放大倍率。 */
+function drawWeapon(ctx: CanvasRenderingContext2D, key: string, sx: number, sy: number, swing: number, facing: number, scale: number): void {
+  const img = tex(key);
+  if (!img) return;
+  const w = img.width * scale * 0.6;
+  const h = img.height * scale * 0.6;
+  const k = scale / TEX_SCALE;
+  const hx = sx + facing * 9 * k;
+  const hy = sy - 24 * k;
+  const angle = (-95 + (1 - swing) * 125) * (Math.PI / 180); // 高举 -95° → 扛着 30°
+  ctx.save();
+  ctx.translate(hx, hy);
+  ctx.scale(facing, 1);
+  ctx.rotate(angle * facing);
+  ctx.drawImage(img, -w / 2, -h, w, h);
+  ctx.restore();
 }
 
 /** 世界格子坐标 -> 当前相机下的画布坐标(供外部在正确位置发射粒子) */
@@ -172,6 +191,14 @@ export function renderDungeon(ctx: CanvasRenderingContext2D, map: FloorMap, _pla
       if (!inView(x, y)) continue;
       const [sx, sy] = S(x, y);
       drawFloorTile(ctx, x, y, sx, sy);
+      // 墙脚投影: 上格是墙的地板画顶部渐变阴影, 提升墙体体量感
+      if (tileAt(x, y - 1) === "wall") {
+        const g = ctx.createLinearGradient(0, sy, 0, sy + 18);
+        g.addColorStop(0, "rgba(0,0,0,0.4)");
+        g.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(sx, sy, TW, 18);
+      }
       if (!map.visible[i]) {
         ctx.fillStyle = "rgba(6,5,14,0.5)";
         ctx.fillRect(sx, sy, TW, TH);
@@ -199,7 +226,7 @@ export function renderDungeon(ctx: CanvasRenderingContext2D, map: FloorMap, _pla
       const isFace = tileAt(x, y + 1) !== "wall" && tileAt(x, y + 1) !== "void";
       list.push({
         depth: y + 0.4,
-        fn: () => drawWallBlock(ctx, x, y, sx, sy, vis, isFace, tileAt(x - 1, y) === "wall", tileAt(x + 1, y) === "wall"),
+        fn: () => drawWallBlock(ctx, x, y, sx, sy, vis, isFace),
       });
       // 立面装饰(hash 分段: 火把 0~0.2 / 旗子 0.2~0.3 / 石柱 0.3~0.36)
       if (vis && isFace) {
@@ -247,7 +274,11 @@ export function renderDungeon(ctx: CanvasRenderingContext2D, map: FloorMap, _pla
         list.push({
           depth: y + 0.15,
           fn: () => {
-            ctx.drawImage(sprite("springProp"), Math.round(sx - 24), Math.round(sy - 36), 48, 48);
+            // 0x72 红色喷泉(水流动画)
+            const basin = tex("wall_fountain_basin_red");
+            if (basin) ctx.drawImage(basin, sx, sy, TW, TH);
+            const mid = frame("wall_fountain_mid_red", Math.floor(performance.now() / 300));
+            if (mid) ctx.drawImage(mid, sx, sy - 6, TW, TH);
           },
         });
         continue;
@@ -332,6 +363,7 @@ export function renderDungeon(ctx: CanvasRenderingContext2D, map: FloorMap, _pla
           ctx.drawImage(sprite(playerSprite), -24, -24, 48, 48);
           ctx.restore();
         }
+        drawWeapon(ctx, anim.weapon, sx + lunge, sy - hop, lungeT, facing, TEX_SCALE);
         // 选中圈
         ctx.strokeStyle = "rgba(255,230,150,0.5)";
         ctx.lineWidth = 1.5;
@@ -368,9 +400,9 @@ export function renderDungeon(ctx: CanvasRenderingContext2D, map: FloorMap, _pla
   fx.updateFx(dt);
   fx.drawFx(ctx);
 
-  // 光照(玩家 + 火把 + 特殊地形)
+  // 光照(玩家暖光 + 火把 + 特殊地形)
   const lights: Light[] = [
-    { x: psx + ox + TW / 2, y: psy + oy + TH / 2 - 14, radius: 240, intensity: 0.95 },
+    { x: psx + ox + TW / 2, y: psy + oy + TH / 2 - 14, radius: 240, intensity: 0.95, warm: "255,205,160" },
     ...torchLights,
   ];
   for (let y = 0; y < map.rows; y++) {
@@ -465,6 +497,7 @@ function drawPortalDecal(ctx: CanvasRenderingContext2D, sx: number, sy: number):
 
 // ---------------- 战斗画面 ----------------
 let combatT = 0;
+const combatAlive = new Set<number>(); // 上一帧仍存活的怪 id(检测死亡瞬间放爆裂)
 
 export function renderCombat(
   ctx: CanvasRenderingContext2D, state: CombatState, player: PlayerState, playerSprite: string,
@@ -487,34 +520,38 @@ export function renderCombat(
   ctx.fillRect(0, 0, W, H);
 
   const gy0 = H * 0.74;
-  // 背景石柱剪影(远近两排)
-  const pillar = (bx: number, bw: number, bh: number, alpha: number) => {
-    const by = gy0 - bh;
-    ctx.fillStyle = `rgba(30,26,48,${alpha})`;
-    ctx.fillRect(bx, by + 10, bw, bh);
-    ctx.fillStyle = `rgba(46,40,74,${alpha})`;
-    ctx.fillRect(bx, by + 10, 4, bh); // 受光边
-    ctx.beginPath();
-    ctx.ellipse(bx + bw / 2, by + 12, bw / 2, 8, 0, Math.PI, 0);
-    ctx.fill();
-    ctx.fillStyle = `rgba(20,17,34,${alpha})`;
-    ctx.fillRect(bx - 5, gy0 - 14, bw + 10, 14); // 柱基
-  };
-  pillar(W * 0.08, 26, 170, 0.9);
-  pillar(W * 0.38, 22, 210, 0.75);
-  pillar(W * 0.68, 26, 180, 0.85);
-  pillar(W * 0.92, 20, 150, 0.95);
-  // 地平线雾气
-  const fog = ctx.createLinearGradient(0, gy0 - 150, 0, gy0 + 6);
-  fog.addColorStop(0, "rgba(20,16,38,0)");
-  fog.addColorStop(1, "rgba(20,16,38,0.75)");
+  // 背景墙: 立面排(带火把/旗子) + 上方四排墙顶, 构成完整洞窟后壁
+  for (let col = -1; col < W / TW + 1; col++) {
+    const face = tex("wall_mid");
+    const top = tex("wall_top_mid");
+    if (face) ctx.drawImage(face, col * TW, gy0 - TH, TW, TH);
+    for (let r = 2; r <= 5; r++) {
+      if (top) ctx.drawImage(top, col * TW, gy0 - r * TH, TW, TH);
+    }
+    // 立面装饰
+    const n = hash2(col * 13 + 7, 3);
+    const cx = col * TW + TW / 2;
+    if (n < 0.22) {
+      drawWallTorch(ctx, cx, gy0 - TH + WALL_H, combatT * 0.4 + col);
+    } else if (n < 0.34) {
+      const img = tex(n < 0.28 ? "wall_banner_red" : "wall_banner_blue");
+      if (img) ctx.drawImage(img, cx - 12, gy0 - TH + 10, 24, 24);
+    } else if (n < 0.4) {
+      const img = tex("wall_column_mid");
+      if (img) ctx.drawImage(img, cx - 16, gy0 - TH + 6, 32, 32);
+    }
+  }
+  // 地平线雾气: 上排墙顶渐隐进黑暗
+  const fog = ctx.createLinearGradient(0, gy0 - 4.2 * TH, 0, gy0 - 1.2 * TH);
+  fog.addColorStop(0, "rgba(10,8,18,0.95)");
+  fog.addColorStop(1, "rgba(20,16,38,0.1)");
   ctx.fillStyle = fog;
-  ctx.fillRect(0, gy0 - 150, W, 156);
+  ctx.fillRect(0, gy0 - 4.2 * TH, W, 3 * TH);
 
-  // 地面砖阵(0x72 地板)
-  for (let row = 0; row < 5; row++) {
+  // 地面砖阵(0x72 地板, 行距 24 重叠铺出纵深)
+  for (let row = 0; row < 6; row++) {
     for (let col = -1; col < W / TW + 1; col++) {
-      drawFloorTile(ctx, col + row * 7, row, col * TW, gy0 + row * 16);
+      drawFloorTile(ctx, col + row * 7, row, col * TW, gy0 + row * 24);
     }
   }
   ctx.fillStyle = "rgba(6,5,14,0.35)";
@@ -525,58 +562,67 @@ export function renderCombat(
   ctx.save();
   ctx.translate(shakeX, shakeY);
 
-  // 怪物(右上排开, idle 动画)
+  const CS = 4; // 战斗精灵放大(帧 px * 4)
+  const footY = gy0 + 44; // 站位: 脚底锚定
+
+  // 怪物(右上排开, idle 动画, 死亡爆裂)
   for (let i = 0; i < state.monsters.length; i++) {
     const m = state.monsters[i];
-    const mx = Math.round(W * (0.56 + i * 0.09));
-    const my = groundYFor(m.boss);
+    const mx = Math.round(W * (0.54 + i * 0.12));
     if (m.hp <= 0) {
-      const img = frame(MON_ANIM[m.body]?.idle ?? m.body, 0);
-      if (img) {
-        ctx.globalAlpha = 0.14;
-        ctx.drawImage(img, mx, my, img.width * TEX_SCALE * 0.85, img.height * TEX_SCALE * 0.85);
-        ctx.globalAlpha = 1;
+      if (combatAlive.has(m.id)) {
+        combatAlive.delete(m.id);
+        fx.crit(mx + 32, footY - 56);
+        fx.hit(mx + 32, footY - 56);
       }
       continue;
     }
-    const bob = Math.sin(combatT * 3 + i * 1.7) * 3;
-    const kw = 44;
-    ctx.fillStyle = "#0d0b16";
-    ctx.fillRect(mx, my - 12 + bob, kw, 5);
-    ctx.fillStyle = m.boss ? "#ff4b4b" : "#4ade80";
-    ctx.fillRect(mx, my - 12 + bob, Math.max(1, (kw * m.hp) / m.maxHp), 5);
-    ctx.font = "10px monospace";
-    ctx.fillStyle = m.boss ? "#ff9b9b" : "#a8a8c0";
-    ctx.fillText(m.name.slice(0, 9), mx, my - 15 + bob);
+    combatAlive.add(m.id);
     const img = frame(MON_ANIM[m.body]?.idle ?? m.body, Math.floor(combatT * 6 + i));
-    if (img) {
-      const sw = img.width * TEX_SCALE * (m.boss ? 1.25 : 0.85);
-      const sh = img.height * TEX_SCALE * (m.boss ? 1.25 : 0.85);
-      drawShadow(ctx, mx + sw / 2, my + sh - 6, sw * 0.7);
-      ctx.save();
-      if (m.hurtFlash > 0) ctx.filter = "brightness(2.6) saturate(0.4)";
-      ctx.drawImage(img, mx, my - 6 + bob, sw, sh);
-      ctx.restore();
-    } else {
-      ctx.drawImage(sprite(m.body), mx, my + bob, 12 * 7, 12 * 7);
-    }
+    if (!img) continue;
+    // 按目标高度归一(不同怪帧高 16~28 不等, 视觉高度统一)
+    const hTarget = 92 * (m.boss ? 1.35 : 1);
+    const s = hTarget / img.height;
+    const sw = img.width * s;
+    const sh = img.height * s;
+    const bob = Math.sin(combatT * 3 + i * 1.7) * 3;
+    const kw = 52;
+    ctx.fillStyle = "#0d0b16";
+    ctx.fillRect(mx, footY - sh - 22 + bob, kw, 5);
+    ctx.fillStyle = m.boss ? "#ff4b4b" : "#4ade80";
+    ctx.fillRect(mx, footY - sh - 22 + bob, Math.max(1, (kw * m.hp) / m.maxHp), 5);
+    ctx.font = "11px monospace";
+    ctx.fillStyle = m.boss ? "#ff9b9b" : "#b8b8d0";
+    ctx.fillText(m.name.slice(0, 9), mx, footY - sh - 26 + bob);
+    drawShadow(ctx, mx + sw / 2, footY - 4, sw * 0.7);
+    ctx.save();
+    if (m.hurtFlash > 0) ctx.filter = "brightness(2.6) saturate(0.4)";
+    ctx.drawImage(img, mx, footY - sh + bob, sw, sh);
+    ctx.restore();
     m.hurtFlash -= dt;
   }
 
   // 玩家(左, 攻击前冲用 hit 帧)
-  const lunge = Math.sin(lungeT * Math.PI) * 26;
+  const lunge = Math.sin(lungeT * Math.PI) * 30;
   const anim = HERO_ANIM[playerSprite] ?? HERO_ANIM.hero_mage;
   const base = lungeT > 0.4 ? anim.hit : anim.idle;
-  const px = Math.round(W * 0.24 - 40 + lunge);
-  const py = gy0 + 16 - 84;
+  const px = Math.round(W * 0.2 + lunge);
   const pimg = frame(base, Math.floor(combatT * (lungeT > 0.4 ? 14 : 6)));
   if (pimg) {
-    const sw = pimg.width * TEX_SCALE;
-    const sh = pimg.height * TEX_SCALE;
-    drawShadow(ctx, px + sw / 2, py + sh - 6, sw * 0.6);
-    ctx.drawImage(pimg, px, py, sw, sh);
+    const sw = pimg.width * CS;
+    const sh = pimg.height * CS;
+    drawShadow(ctx, px + sw / 2, footY - 4, sw * 0.6);
+    ctx.drawImage(pimg, px, footY - sh, sw, sh);
+    drawWeapon(ctx, anim.weapon, px + sw / 2, footY, lungeT, facing, CS);
+    // 玩家参照血蓝条锚在头顶
+    bar(ctx, px + 8, footY - sh - 26, 96, 6, hp / maxHpV, "#ff4b4b");
+    bar(ctx, px + 8, footY - sh - 15, 96, 5, mp / maxMpV, "#5b9cff");
+    ctx.font = "bold 12px monospace";
+    ctx.fillStyle = "#e8e8f4";
+    ctx.fillText(`Lv${player.level} ${player.cls}`, px + 8, footY - sh - 31);
   } else {
-    ctx.drawImage(sprite(playerSprite), px, py, 16 * 5, 16 * 5);
+    bar(ctx, px + 8, footY - 138, 96, 6, hp / maxHpV, "#ff4b4b");
+    bar(ctx, px + 8, footY - 127, 96, 5, mp / maxMpV, "#5b9cff");
   }
   lungeT = Math.max(0, lungeT - dt * 4);
 
@@ -586,25 +632,18 @@ export function renderCombat(
   fx.drawFx(ctx);
   ctx.restore();
 
-  // 玩家血蓝条(紧凑, HUD 有血球, 这里给画布内参照)
-  bar(ctx, px + 6, py - 18, 84, 6, hp / maxHpV, "#ff4b4b");
-  bar(ctx, px + 6, py - 9, 84, 5, mp / maxMpV, "#5b9cff");
-  ctx.font = "bold 11px monospace";
-  ctx.fillStyle = "#e8e8f4";
-  ctx.fillText(`Lv${player.level} ${player.cls}`, px + 6, py - 23);
-
-  // 光照氛围
+  // 光照氛围(玩家暖光 + 怪物各自亮光, 暗幕调淡)
   drawLighting(ctx, W, H, [
-    { x: px + 44, y: py + 40, radius: 210, intensity: 0.9 },
+    { x: px + 32, y: footY - 56, radius: 260, intensity: 0.92, warm: "255,205,160" },
     ...state.monsters.filter((m) => m.hp > 0).map((m) => ({
-      x: W * (0.56 + state.monsters.indexOf(m) * 0.09) + 40,
-      y: gy0 - 40,
-      radius: m.boss ? 120 : 80,
-      intensity: m.boss ? 1 : 0.7,
+      x: W * (0.54 + state.monsters.indexOf(m) * 0.12) + 32,
+      y: footY - 52,
+      radius: 150,
+      intensity: 0.92,
       flicker: !!m.boss,
-      warm: m.boss ? "255,80,60" : undefined,
+      warm: m.boss ? "255,90,70" : "255,195,160",
     })),
-  ], combatT, themeAmbient());
+  ], combatT, "rgba(5,6,14,0.48)");
   drawVignette(ctx, W, H);
 
   // 飘字(暴击金色大字)
@@ -625,10 +664,6 @@ export function renderCombat(
     ctx.fillText(f.text, fx2, fy);
     ctx.restore();
   }
-}
-
-function groundYFor(boss: boolean): number {
-  return boss ? 450 * 0.74 + 48 - 96 - 16 : 450 * 0.74 + 48 - 62 - 16;
 }
 
 function bar(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, ratio: number, color: string): void {

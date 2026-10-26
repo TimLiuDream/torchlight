@@ -22,6 +22,7 @@ import {
   CreateScreen, DeadScreen, GameCanvas,
   InventoryPanel, LootPanel, LogPanel, MerchantPanel, MerchantOffer, PortalPanel, TitleScreen,
 } from "./ui/components";
+import { TouchControls } from "./ui/TouchControls";
 
 type Scene = "title" | "create" | "play" | "dead";
 type OverlayKind = "inv" | "merchant" | "portal" | "loot" | null;
@@ -638,6 +639,11 @@ export default function App() {
         />
       )}
       {toast && <div className="toast">{toast}</div>}
+      <TouchControls
+        keysDown={keysDown}
+        onInteract={onInteract}
+        onToggleInv={() => { setOverlay(overlay === "inv" ? null : "inv"); force(); }}
+      />
     </div>
   );
 }

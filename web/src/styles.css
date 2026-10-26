@@ -58,6 +58,7 @@ canvas.pixel {
   background: var(--panel);
   border: 2px solid var(--line);
   padding: 10px 12px;
+  box-shadow: 0 0 0 2px #0a0812, 3px 3px 0 rgba(0,0,0,0.45);
 }
 
 .panel h3 {
@@ -65,6 +66,7 @@ canvas.pixel {
   font-size: 14px;
   color: var(--gold);
   letter-spacing: 1px;
+  text-shadow: 1px 1px 0 #000;
 }
 
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -116,15 +118,28 @@ button.primary:hover:not(:disabled) { background: #2a2410; }
 
 .title-screen {
   text-align: center;
-  padding: 60px 0 30px;
+  padding: 44px 0 30px;
 }
 .title-screen h1 {
-  font-size: 34px;
-  letter-spacing: 8px;
+  font-size: 38px;
+  letter-spacing: 10px;
   color: var(--gold);
   margin: 0 0 4px;
-  text-shadow: 3px 3px 0 #4a2f92;
+  text-shadow: 3px 3px 0 #4a2f92, 0 0 22px rgba(255, 210, 62, 0.35);
+  animation: title-glow 2.8s ease-in-out infinite;
 }
+@keyframes title-glow {
+  0%, 100% { text-shadow: 3px 3px 0 #4a2f92, 0 0 14px rgba(255, 210, 62, 0.25); }
+  50% { text-shadow: 3px 3px 0 #4a2f92, 0 0 30px rgba(255, 210, 62, 0.55); }
+}
+.title-backdrop {
+  max-width: 720px;
+  margin: 0 auto;
+  border: 2px solid var(--line);
+  box-shadow: 0 0 0 2px #0a0812, 4px 4px 0 rgba(0,0,0,0.5), 0 0 34px rgba(255, 150, 60, 0.08);
+  overflow: hidden;
+}
+.title-backdrop canvas { display: block; width: 100% !important; height: auto !important; }
 .class-card {
   background: var(--panel);
   border: 2px solid var(--line);
@@ -364,5 +379,75 @@ button.primary:hover:not(:disabled) { background: #2a2410; }
 .hud-log {
   position: relative;
   min-height: 0;
+}
+
+/* ---- 触屏控件(仅触屏设备显示) ---- */
+.touch-controls { display: none; }
+@media (pointer: coarse) {
+  .touch-controls {
+    display: block;
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 5;
+  }
+  .tc-dpad {
+    position: absolute;
+    left: 14px;
+    bottom: 14px;
+    display: grid;
+    grid-template-columns: repeat(3, 54px);
+    grid-template-rows: repeat(3, 54px);
+    gap: 2px;
+    pointer-events: auto;
+    touch-action: none;
+  }
+  .tc-key {
+    border: 2px solid rgba(120, 110, 170, 0.55);
+    background: rgba(20, 16, 30, 0.55);
+    color: #cfc8ee;
+    border-radius: 10px;
+    font-size: 17px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+  }
+  .tc-key:active { border-color: var(--gold); color: var(--gold); background: rgba(60, 50, 30, 0.6); }
+  .tc-up { grid-area: 1 / 2; }
+  .tc-left { grid-area: 2 / 1; }
+  .tc-center { grid-area: 2 / 2; font-size: 15px; }
+  .tc-right { grid-area: 2 / 3; }
+  .tc-down { grid-area: 3 / 2; }
+  .tc-side {
+    position: absolute;
+    right: 14px;
+    bottom: 24px;
+    pointer-events: auto;
+    touch-action: none;
+  }
+  .tc-inv { width: 64px; height: 64px; border-radius: 50%; font-size: 14px; }
+}
+
+/* ---- 小屏适配 ---- */
+@media (pointer: coarse), (max-width: 720px) {
+  html, body { overscroll-behavior: none; touch-action: manipulation; }
+  #root { padding: 4px; }
+  .game-wrap { gap: 5px; }
+  .orb { width: 46px; height: 46px; }
+  .orb-num { font-size: 11px; }
+  .actionbar { padding: 5px 7px; gap: 4px; }
+  .actionbar .slot { width: 42px; height: 42px; }
+  .actionbar-info { font-size: 10px; margin-left: 2px; }
+  .minimap { width: 104px !important; }
+  .log { height: 58px; font-size: 11px; }
+  .hud-floor { font-size: 11px; padding: 2px 8px; }
+  .hud-top > .dim { font-size: 10px !important; }
+  .overlay-panel { padding: 12px; }
+  .toast { font-size: 12px; }
 }
 

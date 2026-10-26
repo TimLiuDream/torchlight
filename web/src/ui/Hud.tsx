@@ -123,35 +123,43 @@ export function Minimap({ map }: { map: FloorMap }) {
   useEffect(() => {
     const cv = ref.current;
     if (!cv) return;
-    const ctx = cv.getContext("2d")!;
-    const S = 2;
-    cv.width = map.cols * S;
-    cv.height = map.rows * S;
-    ctx.fillStyle = "#0a0812";
-    ctx.fillRect(0, 0, cv.width, cv.height);
-    for (let y = 0; y < map.rows; y++) {
-      for (let x = 0; x < map.cols; x++) {
-        const i = y * map.cols + x;
-        if (!map.seen[i]) continue;
-        const t = map.tiles[i];
-        if (t === "wall") ctx.fillStyle = "#3a3456";
-        else if (t === "stairs") ctx.fillStyle = "#ffd23e";
-        else if (t === "campfire") ctx.fillStyle = "#ff8a3e";
-        else if (t === "merchant") ctx.fillStyle = "#7ab8ff";
-        else if (t === "portal") ctx.fillStyle = "#b28cff";
-        else if (t === "chest") ctx.fillStyle = "#e8b23a";
-        else ctx.fillStyle = map.visible[i] ? "#8a84a8" : "#4a4460";
-        ctx.fillRect(x * S, y * S, S, S);
+    const draw = () => {
+      const ctx = cv.getContext("2d")!;
+      const S = 2;
+      cv.width = map.cols * S;
+      cv.height = map.rows * S;
+      ctx.fillStyle = "#0a0812";
+      ctx.fillRect(0, 0, cv.width, cv.height);
+      for (let y = 0; y < map.rows; y++) {
+        for (let x = 0; x < map.cols; x++) {
+          const i = y * map.cols + x;
+          if (!map.seen[i]) continue;
+          const t = map.tiles[i];
+          if (t === "wall") ctx.fillStyle = map.visible[i] ? "#565080" : "#3a3456";
+          else if (t === "stairs") ctx.fillStyle = "#ffd23e";
+          else if (t === "campfire") ctx.fillStyle = "#ff8a3e";
+          else if (t === "merchant") ctx.fillStyle = "#7ab8ff";
+          else if (t === "portal") ctx.fillStyle = "#b28cff";
+          else if (t === "chest") ctx.fillStyle = "#e8b23a";
+          else if (t === "spring") ctx.fillStyle = "#4a9ce8";
+          else ctx.fillStyle = map.visible[i] ? "#9a94b8" : "#4a4460";
+          ctx.fillRect(x * S, y * S, S, S);
+        }
       }
-    }
-    for (const m of map.monsters) {
-      const i = m.y * map.cols + m.x;
-      if (!map.visible[i] || m.hp <= 0) continue;
-      ctx.fillStyle = m.boss ? "#ff4b4b" : m.elite ? "#b464ff" : "#ff6b6b";
-      ctx.fillRect(m.x * S - 1, m.y * S - 1, S + 2, S + 2);
-    }
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(map.playerX * S - 1, map.playerY * S - 1, S + 2, S + 2);
+      for (const m of map.monsters) {
+        const i = m.y * map.cols + m.x;
+        if (!map.visible[i] || m.hp <= 0) continue;
+        ctx.fillStyle = m.boss ? "#ff4b4b" : m.elite ? "#b464ff" : "#ff6b6b";
+        ctx.fillRect(m.x * S - 1, m.y * S - 1, S + 2, S + 2);
+      }
+      // 玩家点闪烁(金/白交替)
+      const blink = Math.floor(Date.now() / 400) % 2 === 0;
+      ctx.fillStyle = blink ? "#ffffff" : "#ffd23e";
+      ctx.fillRect(map.playerX * S - 1, map.playerY * S - 1, S + 2, S + 2);
+    };
+    draw();
+    const timer = window.setInterval(draw, 400);
+    return () => window.clearInterval(timer);
   });
   return <canvas ref={ref} className="minimap pixel" />;
 }
