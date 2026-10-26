@@ -2,3 +2,6 @@ save.json
 __pycache__/
 *.pyc
 .mimosa/
+web/node_modules/
+web/dist/
+*.tsbuildinfo

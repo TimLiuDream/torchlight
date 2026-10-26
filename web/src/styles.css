@@ -1,0 +1,193 @@
+/* 像素风 UI */
+:root {
+  --bg: #0b0a12;
+  --panel: #14101e;
+  --panel2: #1a1626;
+  --line: #2a2440;
+  --line2: #3a3456;
+  --text: #d8d8e4;
+  --dim: #7a7490;
+  --gold: #ffd23e;
+  --hp: #ff4b4b;
+  --mp: #5b9cff;
+  --heal: #4ade80;
+  --r-normal: #d8d8d8;
+  --r-magic: #5b8cff;
+  --r-rare: #ffd23e;
+  --r-legend: #ff5b4a;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0;
+  -webkit-font-smoothing: none;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px;
+}
+
+.game-wrap {
+  width: 100%;
+  max-width: 980px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+canvas.pixel {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  width: 100%;
+  border: 2px solid var(--line);
+  background: #08060e;
+  display: block;
+}
+
+.panel {
+  background: var(--panel);
+  border: 2px solid var(--line);
+  padding: 10px 12px;
+}
+
+.panel h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: var(--gold);
+  letter-spacing: 1px;
+}
+
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1; }
+.dim { color: var(--dim); }
+.gold { color: var(--gold); }
+.heal { color: var(--heal); }
+.hp-color { color: var(--hp); }
+.mp-color { color: var(--mp); }
+
+button {
+  font: inherit;
+  background: var(--panel2);
+  color: var(--text);
+  border: 2px solid var(--line2);
+  padding: 4px 12px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--gold); color: var(--gold); }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+button.primary { border-color: var(--gold); color: var(--gold); }
+button.primary:hover:not(:disabled) { background: #2a2410; }
+
+.bar {
+  height: 8px;
+  background: #0e0c16;
+  border: 1px solid var(--line);
+  min-width: 90px;
+  flex: 1;
+}
+.bar > div { height: 100%; }
+
+.log {
+  height: 92px;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.log .damage { color: #ff9b9b; }
+.log .crit { color: var(--gold); }
+.log .heal { color: var(--heal); }
+.log .loot { color: var(--gold); }
+.log .death { color: var(--hp); }
+
+.r-normal { color: var(--r-normal); }
+.r-magic { color: var(--r-magic); }
+.r-rare { color: var(--r-rare); }
+.r-legend { color: var(--r-legend); }
+
+.title-screen {
+  text-align: center;
+  padding: 60px 0 30px;
+}
+.title-screen h1 {
+  font-size: 34px;
+  letter-spacing: 8px;
+  color: var(--gold);
+  margin: 0 0 4px;
+  text-shadow: 3px 3px 0 #4a2f92;
+}
+.class-card {
+  background: var(--panel);
+  border: 2px solid var(--line);
+  padding: 14px;
+  width: 240px;
+  cursor: pointer;
+  text-align: left;
+}
+.class-card:hover { border-color: var(--gold); }
+.class-card canvas { margin: 0 auto 8px; display: block; }
+
+.overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 4, 10, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  padding: 16px;
+}
+.overlay-panel {
+  background: var(--panel);
+  border: 2px solid var(--line2);
+  padding: 16px;
+  width: 100%;
+  max-width: 560px;
+  max-height: 86vh;
+  overflow-y: auto;
+}
+
+.toast {
+  background: var(--panel);
+  border: 2px solid var(--gold);
+  padding: 8px 14px;
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  z-index: 20;
+  max-width: 90vw;
+}
+
+.kbd {
+  border: 1px solid var(--line2);
+  padding: 0 5px;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.hud-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.action-menu { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.action-menu button { min-width: 120px; text-align: left; }
+
+.item-line { padding: 3px 0; font-size: 13px; }
+.item-line button { padding: 1px 8px; font-size: 12px; margin-right: 6px; }
+
+.dead-screen { text-align: center; padding: 40px 0; }
+.dead-screen h1 { color: var(--hp); letter-spacing: 4px; }
