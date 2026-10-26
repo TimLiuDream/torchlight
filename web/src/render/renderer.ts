@@ -8,8 +8,13 @@ import {
 import { drawLighting, drawVignette, type Light } from "./lighting";
 import * as fx from "./particles";
 
-const W = 800;
-const H = 450;
+// 画布逻辑分辨率自适应: W/H 在渲染入口从 ctx.canvas 读取(桌面 800x450, 移动端跟随容器)
+let mainCanvas: HTMLCanvasElement | null = null;
+
+/** 最近一帧渲染的画布尺寸(供外部按同一坐标系发射演出) */
+export function gameCanvasSize(): { w: number; h: number } {
+  return { w: mainCanvas?.width ?? 800, h: mainCanvas?.height ?? 450 };
+}
 
 // ---------------- 相机与演出状态(模块级) ----------------
 const cam: Cam = { x: 0, y: 0, shake: 0, shakeT: 0 };
@@ -133,6 +138,9 @@ export function addWorldFloat(gx: number, gy: number, text: string, color: strin
 
 // ---------------- 正交地牢 ----------------
 export function renderDungeon(ctx: CanvasRenderingContext2D, map: FloorMap, _player: PlayerState, playerSprite: string, dt: number): void {
+  const W = ctx.canvas.width;
+  const H = ctx.canvas.height;
+  mainCanvas = ctx.canvas;
   if (hitStop > 0) {
     hitStop -= dt;
     dt *= 0.12; // 顿帧: 时间变慢
@@ -499,10 +507,27 @@ function drawPortalDecal(ctx: CanvasRenderingContext2D, sx: number, sy: number):
 let combatT = 0;
 const combatAlive = new Set<number>(); // 上一帧仍存活的怪 id(检测死亡瞬间放爆裂)
 
+/** 战斗演出锚点: 与 renderCombat 布局一致(供 App 发射粒子)。targetIdx 为目标怪序号。 */
+export function combatAnchor(canvas: { width: number; height: number }, targetIdx: number): {
+  px: number; py: number; tx: number; ty: number;
+} {
+  const W = canvas.width;
+  const H = canvas.height;
+  return {
+    px: W * 0.2 + 48,
+    py: H * 0.74 - 12,
+    tx: W * (0.54 + targetIdx * 0.12) + 32,
+    ty: H * 0.74 + 44 - 46,
+  };
+}
+
 export function renderCombat(
   ctx: CanvasRenderingContext2D, state: CombatState, player: PlayerState, playerSprite: string,
   hp: number, mp: number, maxHpV: number, maxMpV: number, dt: number,
 ): void {
+  const W = ctx.canvas.width;
+  const H = ctx.canvas.height;
+  mainCanvas = ctx.canvas;
   if (hitStop > 0) {
     hitStop -= dt;
     dt *= 0.12;

@@ -13,7 +13,7 @@ import {
 import type { Action } from "./game/combat";
 import type { CombatState, Equipment, FloorMap, LogLine, Monster, PlayerState } from "./game/types";
 import {
-  addWorldFloat, attackAnim, clearSceneFx, dungeonThemeName, faceDir, hitStopFx, renderCombat, renderDungeon, setDungeonTheme, shakeCam,
+  addWorldFloat, attackAnim, clearSceneFx, combatAnchor, dungeonThemeName, faceDir, gameCanvasSize, hitStopFx, renderCombat, renderDungeon, setDungeonTheme, shakeCam,
   worldToScreenCam,
 } from "./render/renderer";
 import * as fx from "./render/particles";
@@ -33,6 +33,9 @@ const phaseOf = (s: CombatState) => s.phase;
 
 const CANVAS_W = 800;
 const CANVAS_H = 450;
+// 触屏设备: 画布内部分辨率跟随容器, 游戏区撑满屏幕
+const IS_TOUCH = typeof window !== "undefined" &&
+  (window.matchMedia("(pointer: coarse)").matches || "ontouchstart" in window);
 
 export default function App() {
   const [scene, setScene] = useState<Scene>("title");
@@ -178,12 +181,14 @@ export default function App() {
     const state = combatRef.current;
     const p = playerRef.current;
     if (!state || !p || phaseOf(state) !== "player") return;
-    // 目标在战斗画布上的位置(与 renderer 布局对齐)
+    // 战斗演出锚点(与 renderer 布局同一坐标系), 目标取第一只活怪
     const targetIdx = Math.max(0, state.monsters.findIndex((m) => m.hp > 0));
-    const px = CANVAS_W * 0.24;
-    const py = CANVAS_H * 0.74;
-    const tx = CANVAS_W * (0.56 + targetIdx * 0.09) + 36;
-    const ty = CANVAS_H * 0.74 - 44;
+    const { w: CW, h: CH } = gameCanvasSize();
+    const anchor = combatAnchor({ width: CW, height: CH }, targetIdx);
+    const px = anchor.px;
+    const py = anchor.py;
+    const tx = anchor.tx;
+    const ty = anchor.ty;
     const consumed = playerAction(state, p, rngRef.current, action);
     if (!consumed) { force(); return; }
 
@@ -598,9 +603,19 @@ export default function App() {
             </span>
           )}
         </div>
+        {IS_TOUCH && (
+          <button
+            className="fs-btn"
+            title="全屏"
+            onClick={() => {
+              if (document.fullscreenElement) void document.exitFullscreen();
+              else void document.documentElement.requestFullscreen?.().catch(() => {});
+            }}
+          >⛶</button>
+        )}
         <Minimap map={map} />
       </div>
-      <GameCanvas width={CANVAS_W} height={CANVAS_H} drawRef={drawRef} />
+      <GameCanvas width={CANVAS_W} height={CANVAS_H} drawRef={drawRef} adaptive={IS_TOUCH} />
       <div className="hud-bottom">
         <Orb value={p.hp} max={maxHp(p)} color="linear-gradient(#ff7a6b, #c22323)" glow="#ff4b4b" />
         <ActionBar player={p} inCombat={!!combat} onAction={onCombatAction} />

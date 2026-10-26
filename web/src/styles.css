@@ -393,7 +393,7 @@ button.primary:hover:not(:disabled) { background: #2a2410; }
   }
   .tc-joy {
     position: absolute;
-    left: 16px;
+    right: 16px;
     bottom: 18px;
     width: 132px;
     height: 132px;
@@ -419,7 +419,7 @@ button.primary:hover:not(:disabled) { background: #2a2410; }
   }
   .tc-side {
     position: absolute;
-    right: 16px;
+    left: 16px;
     bottom: 28px;
     display: flex;
     gap: 10px;
@@ -459,4 +459,51 @@ button.primary:hover:not(:disabled) { background: #2a2410; }
   .overlay-panel { padding: 12px; }
   .toast { font-size: 12px; }
 }
+/* 触屏: 内容铺满视口高, 游戏画布弹性占大头, 日志小条; 控件贴着游戏区 */
+@media (pointer: coarse) {
+  .game-wrap { min-height: calc(100dvh - 24px); }
+  .game-wrap > .canvas-box {
+    flex: 3;
+    display: flex;
+    min-height: 200px;
+    overflow: hidden;
+  }
+  .game-wrap > .canvas-box canvas {
+    width: 100%;
+    height: 100%;
+  }
+  /* 日志区最小高度必须盖住摇杆(132+18+边距)+额外余量, 否则摇杆探进技能栏 */
+  .game-wrap > .log-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 188px;
+    padding-right: 150px;
+    box-sizing: border-box;
+  }
+  .game-wrap > .log-panel .log {
+    flex: 1;
+    height: auto !important;
+  }
+  .fs-btn { display: block; }
+}
+/* 横屏触屏: 控件缩小, 压扁日志换画布空间 */
+@media (pointer: coarse) and (orientation: landscape) {
+  .game-wrap > .log-panel { min-height: 124px; padding-right: 124px; }
+  .tc-joy { width: 106px; height: 106px; bottom: 8px; right: 10px; }
+  .tc-knob { width: 46px; height: 46px; }
+  .tc-side { bottom: 12px; left: 10px; gap: 8px; }
+  .tc-round { width: 52px; height: 52px; font-size: 13px; }
+  .hud-bottom { gap: 8px; }
+}
+.fs-btn {
+  display: none;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  flex: none;
+  font-size: 15px;
+  color: var(--dim);
+}
+.fs-btn:active { color: var(--gold); border-color: var(--gold); }
 

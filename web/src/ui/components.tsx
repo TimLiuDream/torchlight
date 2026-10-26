@@ -127,13 +127,33 @@ export function SpriteView({ spriteKey, scale = 4 }: { spriteKey: string; scale?
   return <canvas ref={ref} className="pixel" width={16} height={16} style={{ width: 16 * scale, height: 16 * scale }} />;
 }
 
-/** rAF 绘制循环容器。drawRef 指向最新绘制函数, 避免每帧重挂 effect。 */
-export function GameCanvas({ width, height, drawRef }: {
+/** rAF 绘制循环容器。adaptive=true 时画布内部分辨率跟随容器尺寸(移动端),
+ *  否则固定 width×height(桌面 800x450)。drawRef 指向最新绘制函数, 避免每帧重挂 effect。 */
+export function GameCanvas({ width, height, drawRef, adaptive }: {
   width: number;
   height: number;
   drawRef: React.MutableRefObject<(ctx: CanvasRenderingContext2D, dt: number) => void>;
+  adaptive?: boolean;
 }) {
+  const boxRef = useRef<HTMLDivElement>(null);
   const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    if (!adaptive) return;
+    const box = boxRef.current;
+    const cv = ref.current;
+    if (!box || !cv) return;
+    const apply = () => {
+      const r = box.getBoundingClientRect();
+      if (r.width > 40 && r.height > 40) {
+        cv.width = Math.round(r.width);
+        cv.height = Math.round(r.height);
+      }
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(box);
+    return () => ro.disconnect();
+  }, [adaptive]);
   useEffect(() => {
     let raf = 0;
     let last = performance.now();
@@ -150,7 +170,11 @@ export function GameCanvas({ width, height, drawRef }: {
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
   }, [drawRef]);
-  return <canvas ref={ref} className="pixel" width={width} height={height} />;
+  return (
+    <div className={"canvas-box" + (adaptive ? " adaptive" : "")} ref={boxRef}>
+      <canvas ref={ref} className="pixel" width={width} height={height} />
+    </div>
+  );
 }
 
 // ---------------- 面板 ----------------
@@ -191,7 +215,7 @@ export function LogPanel({ log }: { log: LogLine[] }) {
   }, [log.length]);
   const visible = log.slice(-40);
   return (
-    <div className="panel">
+    <div className="panel log-panel">
       <div className="log" ref={ref}>
         {visible.map((l, i) => <div key={i} className={l.kind}>{l.text}</div>)}
       </div>
