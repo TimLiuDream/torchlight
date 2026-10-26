@@ -1,0 +1,4 @@
+save.json
+__pycache__/
+*.pyc
+.mimosa/
