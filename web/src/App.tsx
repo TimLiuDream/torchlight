@@ -13,7 +13,7 @@ import {
 import type { Action } from "./game/combat";
 import type { CombatState, Equipment, FloorMap, LogLine, Monster, PlayerState, SkillNode, StatKey } from "./game/types";
 import {
-  addWorldFloat, attackAnim, clearSceneFx, combatAnchor, dungeonThemeName, faceDir, gameCanvasSize, hitStopFx, renderCombat, renderDungeon, setDungeonTheme, shakeCam,
+  addWorldFloat, attackAnim, clearSceneFx, combatAnchor, dungeonThemeName, faceDir, gameCanvasSize, hitStopFx, renderCombat, renderDungeon, setDungeonTheme, shakeCam, startFloorTransition,
   worldToScreenCam,
 } from "./render/renderer";
 import * as fx from "./render/particles";
@@ -127,6 +127,7 @@ export default function App() {
     const bossTag = isBossFloor(floor) ? " · 首领出没!" : "";
     dlog(`—— 第 ${floor} 层 · ${dungeonThemeName()} · 建议 Lv${recLevel(floor)}${bossTag}`, "loot");
     if (p.level < recLevel(floor)) dlog("! 你的等级低于建议值, 小心行事。", "damage");
+    startFloorTransition(floor, dungeonThemeName());
     persist();
     force();
   };

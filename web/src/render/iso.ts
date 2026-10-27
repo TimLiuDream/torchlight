@@ -71,13 +71,28 @@ export function drawFloorTile(ctx: CanvasRenderingContext2D, gx: number, gy: num
     ctx.fillStyle = "#1b1728";
     ctx.fillRect(sx, sy, TW, TH);
   }
-  // 少量装饰: 头骨 / 坑洞 / 主题色污渍
+  // 少量装饰: 头骨 / 坑洞 / 主题色污渍 / 血迹
   if (n > 0.965) blit("skull", sx, sy);
   else if (n < 0.02) blit("hole", sx, sy);
   else if (n > 0.9 && n < 0.93) {
     ctx.fillStyle = themeDeco();
     ctx.beginPath();
     ctx.ellipse(sx + TW / 2, sy + TH / 2, 10, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (n > 0.86 && n < 0.885) {
+    // 地面血迹(前人战斗的痕迹): 暗红斑点簇
+    const bx = sx + TW / 2 + ((n * 977) % 1) * 14 - 7;
+    const by = sy + TH / 2 + ((n * 613) % 1) * 10 - 5;
+    ctx.fillStyle = "rgba(122,26,26,0.38)";
+    ctx.beginPath();
+    ctx.ellipse(bx, by, 6, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(152,38,32,0.3)";
+    ctx.beginPath();
+    ctx.ellipse(bx + 7, by + 3, 3, 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(bx - 5, by + 5, 2.5, 1.6, 0, 0, Math.PI * 2);
     ctx.fill();
   }
   _ctx = null;

@@ -138,6 +138,16 @@ export function lootBeam(x: number, y: number): void {
 export function levelUp(x: number, y: number): void {
   rings.push({ x, y, r: 6, maxR: 52, life: 0.5, maxLife: 0.5, color: "#ffd23e", width: 3 });
   burst(x, y, { colors: ["#ffd23e", "#fff3b0", "#ffec8a"], count: 26, speed: 200, life: 0.9, size: 3, gravity: 240 });
+  // 升级光柱: 高速上升的长尾亮粒
+  for (let i = 0; i < 12; i++) {
+    push({
+      x: x + rand(-10, 10), y: y + rand(-4, 4),
+      vx: rand(-6, 6), vy: rand(-210, -130),
+      life: rand(0.5, 0.9), maxLife: 0.9,
+      size: rand(2, 3.5), color: i % 2 ? "#ffe98a" : "#fff8d8",
+      gravity: -30, drag: 0.4, glow: true,
+    });
+  }
 }
 
 /** 篝火常驻火星(每帧调用, 低概率发射) */
@@ -163,6 +173,20 @@ export function portalTick(sx: number, sy: number, dt: number): void {
       vx: -Math.cos(a) * 18, vy: -Math.sin(a) * 9,
       life: rand(0.4, 0.8), maxLife: 0.8,
       size: rand(1.5, 2.5), color: "#b28cff",
+      gravity: 0, drag: 0, glow: true,
+    });
+  }
+}
+
+/** 环绕微粒(精英/Boss 光环): 低频沿圆周生成短寿命粒, seed 错开各怪的相位 */
+export function orbitTick(x: number, y: number, radius: number, seed: number, dt: number, color = "#c9a0ff"): void {
+  if (Math.random() < dt * 9) {
+    const a = Math.random() * Math.PI * 2 + seed;
+    push({
+      x: x + Math.cos(a) * radius, y: y + Math.sin(a) * radius * 0.45,
+      vx: -Math.sin(a) * 22, vy: -6,
+      life: rand(0.35, 0.6), maxLife: 0.6,
+      size: rand(1.2, 2.2), color,
       gravity: 0, drag: 0, glow: true,
     });
   }

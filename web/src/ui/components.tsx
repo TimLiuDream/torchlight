@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { affixText, maxHp, playerAtk, playerCrit, playerLeech, playerRegen, setBonuses } from "../game/player";
 import { SETS, SKILL_TREES, STAT_BONUS } from "../game/data";
-import { sprite } from "../render/sprites";
+import { sprite, hero24Frame } from "../render/sprites";
 import { tex, texReady, frame } from "../render/atlas";
 import type { ClassDef, CombatState, Equipment, LogLine, PlayerState, SkillNode, StatKey } from "../game/types";
 
-// 职业精灵 -> 0x72 动画基名(与 renderer HERO_ANIM 一致)
+// 职业精灵 -> 24x24 建模帧
 const HERO_FRAME: Record<string, string> = {
-  hero_mage: "wizzard_m_idle_anim_f0",
-  hero_berserker: "knight_m_idle_anim_f0",
-  hero_engineer: "elf_m_idle_anim_f0",
+  hero_mage: "hero_mage",
+  hero_berserker: "hero_berserker",
+  hero_engineer: "hero_engineer",
 };
 
 /** 标题画面动态地牢横幅: 0x72 墙面/火把/怪物/走动的主角 */
@@ -116,16 +116,18 @@ export function SpriteView({ spriteKey, scale = 4 }: { spriteKey: string; scale?
       const ctx = cv.getContext("2d")!;
       ctx.imageSmoothingEnabled = false;
       ctx.clearRect(0, 0, cv.width, cv.height);
-      const zeroFrame = HERO_FRAME[spriteKey];
-      const img = zeroFrame ? tex(zeroFrame) : undefined;
-      if (img) ctx.drawImage(img, 0, 0, cv.width, cv.height);
-      else ctx.drawImage(sprite(spriteKey), 0, 0, cv.width, cv.height);
+      const heroKey = HERO_FRAME[spriteKey];
+      if (heroKey) {
+        ctx.drawImage(hero24Frame(heroKey, 0), 0, 0, cv.width, cv.height);
+      } else {
+        ctx.drawImage(sprite(spriteKey), 0, 0, cv.width, cv.height);
+      }
     };
     draw();
     texReady.then(draw);
     return () => { alive = false; };
   }, [spriteKey]);
-  return <canvas ref={ref} className="pixel" width={16} height={16} style={{ width: 16 * scale, height: 16 * scale }} />;
+  return <canvas ref={ref} className="pixel" width={24} height={24} style={{ width: 24 * scale, height: 24 * scale }} />;
 }
 
 /** rAF 绘制循环容器。adaptive=true 时画布内部分辨率跟随容器尺寸(移动端),
