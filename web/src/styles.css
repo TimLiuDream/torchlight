@@ -404,6 +404,33 @@ button.primary:hover:not(:disabled) { background: #2a2410; }
   margin-left: 6px;
   color: var(--text);
 }
+/* 经验条 */
+.exp-row { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.exp-track {
+  flex: 1;
+  height: 5px;
+  background: #0d0b16;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+  min-width: 64px;
+}
+.exp-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4ade80, #a3e635);
+  transition: width 0.25s ease-out;
+}
+.exp-num { font-size: 10px; color: var(--dim); white-space: nowrap; }
+.pt-hint {
+  font-size: 10px;
+  color: var(--gold);
+  animation: pt-blink 1.2s ease-in-out infinite;
+}
+.pt-hint.sk { color: #7ab8ff; }
+@keyframes pt-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
 .hud-log {
   position: relative;
   min-height: 0;

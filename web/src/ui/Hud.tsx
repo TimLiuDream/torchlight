@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { maxHp, playerAtk } from "../game/player";
+import { expNeed, maxHp, playerAtk } from "../game/player";
 import type { Action } from "../game/combat";
 import type { FloorMap, PlayerState } from "../game/types";
 import { icon } from "../render/sprites";
@@ -100,6 +100,14 @@ export function ActionBar({ player, inCombat, onAction }: {
         <span>Lv{player.level}</span>
         <span>⚔{playerAtk(player)}</span>
         <span className="gold">{player.gold}金</span>
+        <div className="exp-row" title={`经验 ${player.exp}/${expNeed(player)}`}>
+          <div className="exp-track">
+            <div className="exp-fill" style={{ width: `${Math.min(100, (player.exp / expNeed(player)) * 100)}%` }} />
+          </div>
+          <span className="exp-num">{player.exp}/{expNeed(player)}</span>
+        </div>
+        {player.statPoints > 0 && <span className="pt-hint">属性点{player.statPoints}</span>}
+        {player.skillPoints > 0 && <span className="pt-hint sk">技能点{player.skillPoints}</span>}
       </div>
     </div>
   );
