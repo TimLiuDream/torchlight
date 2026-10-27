@@ -481,6 +481,12 @@ export default function App() {
         }
         if (overlay === "inv") {
           if (k === "i" || k === "escape") { setOverlay(null); force(); }
+          // 数字键直接穿对应背包位(1-9, 0=第10格)
+          else if (/^[0-9]$/.test(k) && playerRef.current) {
+            const idx = k === "0" ? 9 : Number(k) - 1;
+            const eq = playerRef.current.bag[idx];
+            if (eq) wearFromBag(eq);
+          }
           return;
         }
         if (combatRef.current) {

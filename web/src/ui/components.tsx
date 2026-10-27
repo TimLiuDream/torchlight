@@ -305,11 +305,16 @@ export function InventoryPanel({ player, onWear, onDrop, onSpendStat, onOpenSkil
       {player.bag.length === 0 && <div className="dim">背包是空的。</div>}
       {player.bag.map((eq, i) => (
         <div className="item-line" key={i}>
-          <button onClick={() => onWear(eq)}>穿</button>
-          <button onClick={() => onDrop(eq)}>丢</button>
+          <button onClick={() => onWear(eq)} title="穿上">穿{(i + 1) % 10}</button>
+          <button onClick={() => onDrop(eq)} title="丢弃">丢</button>
           <EquipLine eq={eq} />
         </div>
       ))}
+      {player.bag.length > 0 && (
+        <div className="dim" style={{ fontSize: 11, marginTop: 6 }}>
+          点击"穿N"穿上, 或按对应数字键 1-9
+        </div>
+      )}
       <div className="row" style={{ marginTop: 10 }}>
         <button onClick={onClose}>关闭 (I)</button>
       </div>
