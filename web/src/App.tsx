@@ -476,11 +476,13 @@ export default function App() {
         if (overlay === "merchant") { if (k === "escape") { setOverlay(null); force(); } return; }
         if (overlay === "portal") { if (k === "escape") { setOverlay(null); force(); } return; }
         if (overlay === "skill") {
-          if (k === "k" || k === "escape") { setOverlay(null); force(); }
+          if (k === "k" || k === "escape" || k === "i") { setOverlay(null); force(); }
           return;
         }
         if (overlay === "inv") {
           if (k === "i" || k === "escape") { setOverlay(null); force(); }
+          // K 在背包里直接跳技能树
+          else if (k === "k") { setOverlay("skill"); force(); }
           // 数字键直接穿对应背包位(1-9, 0=第10格)
           else if (/^[0-9]$/.test(k) && playerRef.current) {
             const idx = k === "0" ? 9 : Number(k) - 1;
@@ -494,6 +496,7 @@ export default function App() {
           else if (k === "2") onCombatAction({ kind: "skill" });
           else if (k === "3") onCombatAction({ kind: "potion", which: "血瓶" });
           else if (k === "4") onCombatAction({ kind: "potion", which: "蓝瓶" });
+          else if (k === "k") { setOverlay("skill"); force(); }
           return;
         }
         if (k === "e" || k === " ") onInteract();
@@ -617,7 +620,7 @@ export default function App() {
             </>
           ) : (
             <span className="dim" style={{ fontSize: 12 }}>
-              <span className="kbd">WASD</span> 移动 · <span className="kbd">E</span> 交互 · <span className="kbd">I</span> 背包
+              <span className="kbd">WASD</span> 移动 · <span className="kbd">E</span> 交互 · <span className="kbd">I</span> 背包 · <span className="kbd">K</span> 技能树
               {p.level < recLevel(floorRef.current) && <span className="hp-color"> · 等级低于建议值, 小心!</span>}
             </span>
           )}
