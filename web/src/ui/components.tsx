@@ -3,7 +3,7 @@ import { affixText, maxHp, playerAtk, playerCrit, playerLeech, playerRegen, setB
 import { SETS, SKILL_TREES, STAT_BONUS } from "../game/data";
 import { sprite, hero24Frame } from "../render/sprites";
 import { tex, texReady, frame } from "../render/atlas";
-import type { ClassDef, CombatState, Equipment, LogLine, PlayerState, SkillNode, StatKey } from "../game/types";
+import type { ClassDef, Equipment, LogLine, PlayerState, SkillNode, StatKey } from "../game/types";
 
 // 职业精灵 -> 24x24 建模帧
 const HERO_FRAME: Record<string, string> = {
@@ -97,14 +97,6 @@ export function TitleBackdrop() {
 }
 
 // ---------------- 基础 ----------------
-export function Bar({ ratio, color }: { ratio: number; color: string }) {
-  return (
-    <div className="bar">
-      <div style={{ width: `${Math.max(0, Math.min(100, ratio * 100))}%`, background: color }} />
-    </div>
-  );
-}
-
 export function SpriteView({ spriteKey, scale = 4 }: { spriteKey: string; scale?: number }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -181,36 +173,6 @@ export function GameCanvas({ width, height, drawRef, adaptive }: {
 }
 
 // ---------------- 面板 ----------------
-export function StatusHud({ player }: { player: PlayerState }) {
-  return (
-    <div className="panel hud-status">
-      <span className="hp-color">❤ {player.hp}/{maxHpOf(player)}</span>
-      <span className="mp-color">✦ {player.mp}/{player.maxMp}</span>
-      <span>⚔ {atkOf(player)}</span>
-      <span>暴击 {critOf(player)}%</span>
-      <span>Lv{player.level}</span>
-      <span className="gold">金币 {player.gold}</span>
-      <span>[血瓶×{player.potions["血瓶"]} 蓝瓶×{player.potions["蓝瓶"]}]</span>
-    </div>
-  );
-}
-// 避免循环 import: HUD 的属性计算内联(公式与 player.ts 一致)
-function maxHpOf(p: PlayerState) {
-  let s = 0;
-  for (const e of Object.values(p.equip)) if (e) s += e.hp;
-  return Math.floor(p.baseHp * (1 + (p.level - 1) * 0.15)) + s;
-}
-function atkOf(p: PlayerState) {
-  let s = 0;
-  for (const e of Object.values(p.equip)) if (e) s += e.atk;
-  return Math.floor(p.baseAtk * (1 + (p.level - 1) * 0.12)) + s;
-}
-function critOf(p: PlayerState) {
-  let s = 5;
-  for (const e of Object.values(p.equip)) if (e) s += e.crit;
-  return s;
-}
-
 export function LogPanel({ log }: { log: LogLine[] }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -564,34 +526,3 @@ export function DeadScreen({ player, floor, best, onRetry, onTitle }: {
 }
 
 // ---------------- 战斗 ----------------
-export function CombatMenu({ player, onAction }: {
-  player: PlayerState;
-  onAction: (a: { kind: "attack" } | { kind: "skill" } | { kind: "potion"; which: "血瓶" | "蓝瓶" }) => void;
-}) {
-  return (
-    <div className="action-menu">
-      <button onClick={() => onAction({ kind: "attack" })}>[1] 普攻</button>
-      <button onClick={() => onAction({ kind: "skill" })}>
-        [2] {player.skill.name} ({player.skill.cost}蓝)
-      </button>
-      <button onClick={() => onAction({ kind: "potion", which: "血瓶" })} disabled={player.potions["血瓶"] <= 0}>
-        [3] 血瓶 ×{player.potions["血瓶"]}
-      </button>
-      <button onClick={() => onAction({ kind: "potion", which: "蓝瓶" })} disabled={player.potions["蓝瓶"] <= 0}>
-        [4] 蓝瓶 ×{player.potions["蓝瓶"]}
-      </button>
-    </div>
-  );
-}
-
-export function CombatStatus({ state }: { state: CombatState }) {
-  const phaseText =
-    state.phase === "player" ? "你的回合" :
-    state.phase === "enemy" ? "敌方行动中…" :
-    state.phase === "won" ? "战斗胜利!" : "你倒下了…";
-  return (
-    <span>
-      第 {state.round + 1} 回合 · <span style={{ color: state.phase === "player" ? "var(--gold)" : "var(--dim)" }}>{phaseText}</span>
-    </span>
-  );
-}

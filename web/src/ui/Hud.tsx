@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { expNeed, maxHp, playerAtk } from "../game/player";
+import { expNeed, playerAtk } from "../game/player";
 import type { Action } from "../game/combat";
 import type { FloorMap, PlayerState } from "../game/types";
 import { icon } from "../render/sprites";
@@ -170,13 +170,4 @@ export function Minimap({ map }: { map: FloorMap }) {
     return () => window.clearInterval(timer);
   });
   return <canvas ref={ref} className="minimap pixel" />;
-}
-
-/** 战斗/探索共用的状态摘要(移动端窄屏时的备用信息) */
-export function StatLine({ player }: { player: PlayerState }) {
-  return (
-    <span className="dim" style={{ fontSize: 12 }}>
-      ❤{player.hp}/{maxHp(player)} ✦{player.mp}/{player.maxMp} ⚔{playerAtk(player)}
-    </span>
-  );
 }

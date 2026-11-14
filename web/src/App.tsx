@@ -185,12 +185,12 @@ export default function App() {
     const py = anchor.py;
     const tx = anchor.tx;
     const ty = anchor.ty;
-    const consumed = playerAction(state, p, rngRef.current, action);
-    if (!consumed) { force(); return; }
+    const res = playerAction(state, p, rngRef.current, action);
+    if (!res.ok) { force(); return; }
 
     if (action.kind === "attack" || action.kind === "skill") {
       attackAnim();
-      const isCrit = state.log[state.log.length - 1]?.text.includes("(暴击!)") ?? false;
+      const isCrit = res.crit;
       if (action.kind === "skill") {
         if (p.cls === "灰烬法师") fx.flame(px + 40, py - 60, tx, ty);
         else if (p.cls === "狂战士") fx.whirl(tx, ty);

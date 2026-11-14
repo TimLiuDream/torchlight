@@ -10,6 +10,12 @@ export type Action =
   | { kind: "skill" }
   | { kind: "potion"; which: "血瓶" | "蓝瓶" };
 
+/** playerAction 的结果: ok=false 表示行动无效(法力/药剂不足), 不消耗回合; crit 供暴击演出。 */
+export interface ActionResult {
+  ok: boolean;
+  crit: boolean;
+}
+
 export function log(state: CombatState, text: string, kind: LogLine["kind"] = "info"): void {
   state.log.push({ text, kind });
 }
@@ -53,28 +59,30 @@ function dealDamage(state: CombatState, player: PlayerState, target: CombatMonst
 }
 
 /**
- * 玩家一次行动。返回 false 表示行动无效(法力/药剂不足), 不消耗回合。
- * 行动有效时推进 phase 到 enemy(除非战斗已结束)。
+ * 玩家一次行动。返回 ok=false 表示行动无效(法力/药剂不足), 不消耗回合。
+ * 行动有效时推进 phase 到 enemy(除非战斗已结束)。crit 标记本次行动是否有暴击命中(演出用)。
  */
-export function playerAction(state: CombatState, player: PlayerState, rng: Rng, action: Action): boolean {
+export function playerAction(state: CombatState, player: PlayerState, rng: Rng, action: Action): ActionResult {
   const targets = livingTargets(state);
-  if (!targets.length) return true;
+  if (!targets.length) return { ok: true, crit: false };
   const target = targets[0];
+  let crit = false;
 
   if (action.kind === "attack") {
     const dmg = Math.floor(playerAtk(player) * rng.uniform(0.9, 1.1));
-    const crit = rng.next() * 100 < playerCrit(player);
+    crit = rng.next() * 100 < playerCrit(player);
     dealDamage(state, player, target, dmg * (crit ? 2 : 1), crit);
   } else if (action.kind === "skill") {
     if (player.mp < player.skill.cost) {
       log(state, "法力不足!", "info");
-      return false;
+      return { ok: false, crit: false };
     }
     player.mp -= player.skill.cost;
     const atk = playerAtk(player);
     switch (player.skill.kind) {
       case "whirl": {
         // 必暴
+        crit = true;
         dealDamage(state, player, target, Math.floor(atk * 1.6 * 2), true);
         break;
       }
@@ -101,6 +109,7 @@ export function playerAction(state: CombatState, player: PlayerState, rng: Rng, 
       }
       case "leechWhirl": {
         const dmg = Math.floor(atk * 2);
+        crit = true;
         dealDamage(state, player, target, dmg, true);
         const heal = Math.max(1, Math.floor(dmg * 0.1));
         player.hp = Math.min(maxHp(player), player.hp + heal);
@@ -123,7 +132,7 @@ export function playerAction(state: CombatState, player: PlayerState, rng: Rng, 
   } else {
     if (player.potions[action.which] <= 0) {
       log(state, `没有${action.which}了!`, "info");
-      return false;
+      return { ok: false, crit: false };
     }
     player.potions[action.which] -= 1;
     if (action.which === "血瓶") {
@@ -142,7 +151,7 @@ export function playerAction(state: CombatState, player: PlayerState, rng: Rng, 
   } else {
     state.phase = "enemy";
   }
-  return true;
+  return { ok: true, crit };
 }
 
 /** 敌方一轮行动。返回 false 表示玩家死亡。 */

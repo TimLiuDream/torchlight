@@ -1,5 +1,5 @@
-// 程序化像素精灵: 字符画 + 调色板, 启动时烘焙到离屏 canvas。
-// 角色精灵 12x12, 渲染时在 16px tile 内居中; 地形纹理程序化生成。
+// 程序化像素精灵: 字符画 + 调色板, 烘焙到离屏 canvas。
+// 怪物精灵是 0x72 贴图未就绪时的回退(renderer.blitActor); 主角 24x24 为主要建模。
 
 type SpriteDef = {
   rows: string[];
@@ -287,27 +287,6 @@ const DEFS: Record<string, SpriteDef> = {
     ],
     palette: { "0": P.outline, "5": "#c8283c", "7": "#e85a6a", "1": "#ffd23e", "6": "#8c1a28" },
   },
-  merchant: {
-    rows: [
-      "....000000......",
-      "...06666660.....",
-      "..0666666660....",
-      "..0633333360....",
-      "..0313113130....",
-      "...03333330.....",
-      "....03330.......",
-      "...007777700....",
-      "..07784878770...",
-      ".077787877760...",
-      ".077777777650...",
-      "..07777776500...",
-      "...0777.7600....",
-      "...0110.0110....",
-      "....00...00.....",
-      "................",
-    ],
-    palette: { "0": P.outline, "6": "#4a3a6a", "3": P.skin, "1": "#2a1a4a", "7": "#5a4a7a", "8": "#6e5c94", "4": "#ffd23e" },
-  },
   campfireProp: {
     rows: [
       "................",
@@ -328,48 +307,6 @@ const DEFS: Record<string, SpriteDef> = {
       "................",
     ],
     palette: { "2": "#ff6b2e", "3": "#ffa03e", "4": "#ffd23e", "5": "#fff8d8", "6": "#5a3a1e", "7": "#7a5228", "0": "#14101e" },
-  },
-  springProp: {
-    rows: [
-      "................",
-      "................",
-      "................",
-      "................",
-      "......0000......",
-      "....00333300....",
-      "...0334443330...",
-      "..033444443330..",
-      "..034444444430..",
-      "..034455444430..",
-      "..033444443330..",
-      "...0334443330...",
-      "....00333300....",
-      "......0000......",
-      "................",
-      "................",
-    ],
-    palette: { "0": "#1a3a6a", "3": "#2e6ac8", "4": "#7ab8ff", "5": "#c8e8ff" },
-  },
-  chest: {
-    rows: [
-      "................",
-      "................",
-      "................",
-      "...0000000000...",
-      "..06777777760...",
-      ".0677777777760..",
-      ".0666666666660..",
-      ".0000000000000..",
-      ".066004600660...",
-      ".066004600660...",
-      ".066004600660...",
-      ".066666666660...",
-      ".000000000000...",
-      "................",
-      "................",
-      "................",
-    ],
-    palette: { "0": P.outline, "6": "#8c5a2b", "7": "#a8743d", "4": "#ffd23e" },
   },
 };
 
@@ -582,30 +519,25 @@ export function hero24Frame(key: string, phase: number): HTMLCanvasElement {
 }
 
 let cache = new Map<string, HTMLCanvasElement>();
-// 每个精灵 "1"(眼色)像素坐标 -> 发光眼叠层用
-const eyeMap = new Map<string, Array<[number, number]>>();
 
-function bake(key: string, def: SpriteDef): HTMLCanvasElement {
+function bake(def: SpriteDef): HTMLCanvasElement {
   const h = def.rows.length;
   const w = def.rows[0].length;
   const cv = document.createElement("canvas");
   cv.width = w;
   cv.height = h;
   const ctx = cv.getContext("2d")!;
-  const eyes: Array<[number, number]> = [];
   for (let y = 0; y < h; y++) {
     const row = def.rows[y];
     for (let x = 0; x < row.length; x++) {
       const ch = row[x];
       if (ch === "." || ch === " ") continue;
-      if (ch === "1") eyes.push([x, y]);
       const color = def.palette[ch];
       if (!color) continue;
       ctx.fillStyle = color;
       ctx.fillRect(x, y, 1, 1);
     }
   }
-  eyeMap.set(key, eyes);
   return cv;
 }
 
@@ -614,26 +546,10 @@ export function sprite(key: string): HTMLCanvasElement {
   if (!cv) {
     const def = DEFS[key];
     if (!def) throw new Error(`unknown sprite: ${key}`);
-    cv = bake(key, def);
+    cv = bake(def);
     cache.set(key, cv);
   }
   return cv;
-}
-
-/** 精灵中 "1"(眼色)像素的坐标列表 —— 发光眼叠层用 */
-export function spriteEyes(key: string): Array<[number, number]> {
-  return eyeMap.get(key) ?? [];
-}
-
-/** 画一个角色精灵, 以 tile 中心对齐。 */
-export function drawSprite(
-  ctx: CanvasRenderingContext2D, key: string, tileX: number, tileY: number, tile = 16, scale = 1,
-): void {
-  const cv = sprite(key);
-  const w = cv.width * scale;
-  const h = cv.height * scale;
-  const off = (tile - 12 * scale) / 2;
-  ctx.drawImage(cv, Math.round(tileX * tile + off), Math.round(tileY * tile + off), w, h);
 }
 
 // ---------------- 技能栏像素图标 (10x10) ----------------
@@ -708,138 +624,8 @@ export function icon(key: string): HTMLCanvasElement {
   if (!cv) {
     const def = ICONS[key];
     if (!def) throw new Error(`unknown icon: ${key}`);
-    cv = bake(key, def);
+    cv = bake(def);
     iconCache.set(key, cv);
   }
   return cv;
-}
-
-// ---------------- 程序化地形纹理 ----------------
-let tileCache = new Map<string, HTMLCanvasElement>();
-
-function makeTile(key: string, painter: (ctx: CanvasRenderingContext2D) => void): HTMLCanvasElement {
-  let cv = tileCache.get(key);
-  if (!cv) {
-    cv = document.createElement("canvas");
-    cv.width = 16;
-    cv.height = 16;
-    painter(cv.getContext("2d")!);
-    tileCache.set(key, cv);
-  }
-  return cv;
-}
-
-/** 确定性伪随机(渲染噪点用, 与游戏 rng 无关)。 */
-function noise(x: number, y: number, n: number): number {
-  return ((x * 73856093) ^ (y * 19349663)) % n;
-}
-
-export function wallTile(): HTMLCanvasElement {
-  return makeTile("wall", (ctx) => {
-    ctx.fillStyle = "#2a2440";
-    ctx.fillRect(0, 0, 16, 16);
-    ctx.fillStyle = "#1a1626";
-    for (let y = 0; y < 16; y += 4) ctx.fillRect(0, y, 16, 1);
-    for (let y = 0; y < 16; y += 4) {
-      const shift = (y / 4) % 2 === 0 ? 0 : 4;
-      for (let x = shift; x < 16; x += 8) ctx.fillRect(x, y, 1, 4);
-    }
-    ctx.fillStyle = "#332b4e";
-    for (let y = 0; y < 16; y += 4) ctx.fillRect(0, y + 1, 16, 1);
-  });
-}
-
-export function floorTile(): HTMLCanvasElement {
-  return makeTile("floor", (ctx) => {
-    ctx.fillStyle = "#17141f";
-    ctx.fillRect(0, 0, 16, 16);
-    for (let y = 0; y < 16; y++)
-      for (let x = 0; x < 16; x++) {
-        const n = noise(x, y, 5);
-        if (n === 0) { ctx.fillStyle = "#1d1930"; ctx.fillRect(x, y, 1, 1); }
-        else if (n === 1) { ctx.fillStyle = "#12101a"; ctx.fillRect(x, y, 1, 1); }
-      }
-  });
-}
-
-export function stairsTile(): HTMLCanvasElement {
-  return makeTile("stairs", (ctx) => {
-    ctx.drawImage(floorTile(), 0, 0);
-    ctx.fillStyle = "#0e0c16";
-    ctx.fillRect(2, 2, 12, 12);
-    const grays = ["#4a4a5c", "#6a6a80", "#8a8aa0", "#b0b0c8"];
-    for (let i = 0; i < 4; i++) {
-      ctx.fillStyle = grays[i];
-      ctx.fillRect(3 + i * 0.5, 12 - i * 3, 10 - i, 2);
-    }
-  });
-}
-
-export function campfireTile(): HTMLCanvasElement {
-  return makeTile("campfire", (ctx) => {
-    ctx.drawImage(floorTile(), 0, 0);
-    ctx.fillStyle = "#5a3a1e";
-    ctx.fillRect(4, 11, 8, 2);
-    ctx.fillStyle = "#7a5228";
-    ctx.fillRect(3, 12, 10, 2);
-    ctx.fillStyle = "#ff7a2e";
-    ctx.fillRect(6, 6, 4, 5);
-    ctx.fillRect(5, 8, 6, 3);
-    ctx.fillStyle = "#ffd23e";
-    ctx.fillRect(7, 8, 2, 3);
-    ctx.fillRect(6, 9, 4, 2);
-    ctx.fillStyle = "#fff4c8";
-    ctx.fillRect(7, 10, 2, 1);
-  });
-}
-
-export function springTile(): HTMLCanvasElement {
-  return makeTile("spring", (ctx) => {
-    ctx.drawImage(floorTile(), 0, 0);
-    ctx.fillStyle = "#0e0c16";
-    ctx.fillRect(2, 4, 12, 10);
-    ctx.fillStyle = "#2e6ac8";
-    ctx.fillRect(3, 5, 10, 8);
-    ctx.fillStyle = "#5b9cff";
-    ctx.fillRect(4, 6, 8, 2);
-    ctx.fillRect(5, 10, 6, 2);
-    ctx.fillStyle = "#c8e8ff";
-    ctx.fillRect(6, 7, 2, 1);
-  });
-}
-
-export function chestTile(): HTMLCanvasElement {
-  return makeTile("chest", (ctx) => {
-    ctx.drawImage(floorTile(), 0, 0);
-    ctx.drawImage(sprite("chest"), 2, 2);
-  });
-}
-
-export function portalTile(): HTMLCanvasElement {
-  return makeTile("portal", (ctx) => {
-    ctx.drawImage(floorTile(), 0, 0);
-    const rings: Array<[string, number]> = [
-      ["#4a2f92", 7], ["#8a5cf0", 5], ["#c8b0ff", 3], ["#ffffff", 1],
-    ];
-    for (const [color, r] of rings) {
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(8, 8, r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  });
-}
-
-export function merchantTile(): HTMLCanvasElement {
-  return makeTile("merchant", (ctx) => {
-    ctx.drawImage(floorTile(), 0, 0);
-    ctx.drawImage(sprite("merchant"), 2, 2);
-  });
-}
-
-export function mimicTile(): HTMLCanvasElement {
-  return makeTile("mimic", (ctx) => {
-    ctx.drawImage(floorTile(), 0, 0);
-    ctx.drawImage(sprite("mimic"), 2, 2);
-  });
 }
