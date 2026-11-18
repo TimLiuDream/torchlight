@@ -1,129 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { affixText, maxHp, playerAtk, playerCrit, playerLeech, playerRegen, setBonuses } from "../game/player";
 import { SETS, SKILL_TREES, STAT_BONUS } from "../game/data";
-import { sprite, hero24Frame } from "../render/sprites";
-import { tex, texReady, frame } from "../render/atlas";
-import type { ClassDef, Equipment, LogLine, PlayerState, SkillNode, StatKey } from "../game/types";
+import { hdUrl, onHdReady } from "../render/hdAssets";
+import type { LogicalCanvas } from "../render/renderer";
+import type { ClassDef, Equipment, LogLine, PlayerState, SkillNode, Slot, StatKey } from "../game/types";
+import { ActionIcon, ItemIconBox, StatBadge } from "./Icons";
 
-// 职业精灵 -> 24x24 建模帧
-const HERO_FRAME: Record<string, string> = {
-  hero_mage: "hero_mage",
-  hero_berserker: "hero_berserker",
-  hero_engineer: "hero_engineer",
+const CLASS_META: Record<string, { role: string; aura: string }> = {
+  灰烬法师: { role: "远程毁灭法术 · 元素爆发", aura: "radial-gradient(circle at 50% 42%, rgba(168,85,247,0.34), rgba(255,107,43,0.14) 48%, transparent 75%)" },
+  狂战士: { role: "重甲狂怒近战 · 刀刀烈暴", aura: "radial-gradient(circle at 50% 42%, rgba(239,68,68,0.34), rgba(212,164,76,0.12) 48%, transparent 75%)" },
+  工程师: { role: "蒸汽重锤战技 · 机械续航", aura: "radial-gradient(circle at 50% 42%, rgba(56,189,248,0.32), rgba(52,211,153,0.14) 48%, transparent 75%)" },
 };
 
-/** 标题画面动态地牢横幅: 0x72 墙面/火把/怪物/走动的主角 */
-export function TitleBackdrop() {
-  const ref = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    const cv = ref.current;
-    if (!cv) return;
-    const ctx = cv.getContext("2d")!;
-    let raf = 0;
-    let cancelled = false;
-    const T = 48;
-    const COLS = 19;
-    const ROWS = 4;
-    const draw = (now: number) => {
-      if (cancelled) return;
-      const t = now / 1000;
-      ctx.imageSmoothingEnabled = false;
-      ctx.fillStyle = "#08060e";
-      ctx.fillRect(0, 0, cv.width, cv.height);
-      // 顶排墙顶 + 立面排 + 两行地板
-      for (let y = 0; y < ROWS; y++) {
-        for (let x = 0; x < COLS; x++) {
-          const sx = x * T;
-          const sy = y * T;
-          const wallTop = tex("wall_top_mid");
-          const wallFace = tex("wall_mid");
-          const floor = tex(`floor_${1 + ((x * 7 + y * 13) % 8)}`);
-          if (y === 0 && wallTop) ctx.drawImage(wallTop, sx, sy, T, T);
-          else if (y === 1 && wallFace) ctx.drawImage(wallFace, sx, sy, T, T);
-          else if (y >= 2 && floor) ctx.drawImage(floor, sx, sy, T, T);
-        }
-      }
-      // 火把与旗子
-      for (const x of [1, 5, 9, 13, 17]) {
-        const cx = x * T + T / 2;
-        ctx.fillStyle = "#5a3a1e";
-        ctx.fillRect(cx - 1, T + 6, 3, 8);
-        const sway = Math.sin(t * 6 + x) * 1.2;
-        ctx.fillStyle = "#ff6b2e";
-        ctx.fillRect(cx - 2 + sway * 0.5, T, 5, 6);
-        ctx.fillStyle = "#ffa03e";
-        ctx.fillRect(cx - 1 + sway * 0.7, T + 1, 4, 4);
-        ctx.fillStyle = "#fff8d8";
-        ctx.fillRect(cx + sway, T + 2, 2, 3);
-      }
-      for (const x of [3, 11, 15]) {
-        const img = tex(x === 11 ? "wall_banner_red" : "wall_banner_blue");
-        if (img) ctx.drawImage(img, x * T + T / 2 - 12, T + 8, 24, 24);
-      }
-      // 怪物(两侧 idle)
-      for (const [name, bx] of [["skelet_idle", 2.5], ["goblin_idle", 6.5], ["masked_orc_idle", 12.5], ["muddy_idle", 16.5]] as const) {
-        const img = frame(name, Math.floor(t * 5) % 4);
-        if (img) {
-          const w = img.width * 3;
-          const h = img.height * 3;
-          ctx.drawImage(img, bx * T - w / 2, 3 * T + T - h + 8, w, h);
-        }
-      }
-      // 主角往返走动
-      const span = (COLS - 4) * T;
-      const px = 2.5 * T + ((t * 46) % span);
-      const dir = Math.floor((t * 46) / span) % 2 === 0 ? 1 : -1;
-      const run = frame(dir === 1 ? "wizzard_m_run" : "wizzard_m_run", Math.floor(t * 8) % 4);
-      const idle = frame("wizzard_m_idle", Math.floor(t * 5) % 4);
-      const img = run ?? idle;
-      if (img) {
-        const w = img.width * 3;
-        const h = img.height * 3;
-        ctx.save();
-        ctx.translate(px, 3 * T + T + 8);
-        ctx.scale(dir, 1);
-        ctx.drawImage(img, -w / 2, -h, w, h);
-        ctx.restore();
-      }
-      raf = requestAnimationFrame(draw);
-    };
-    let started = false;
-    const start = () => { if (!started && !cancelled) { started = true; raf = requestAnimationFrame(draw); } };
-    start();
-    texReady.then(start);
-    return () => { cancelled = true; cancelAnimationFrame(raf); };
-  }, []);
-  return <canvas ref={ref} className="pixel" width={19 * 48} height={4 * 48} style={{ width: "100%", imageRendering: "pixelated" }} />;
-}
-
-// ---------------- 基础 ----------------
-export function SpriteView({ spriteKey, scale = 4 }: { spriteKey: string; scale?: number }) {
-  const ref = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    let alive = true;
-    const draw = () => {
-      if (!alive) return;
-      const cv = ref.current;
-      if (!cv) return;
-      const ctx = cv.getContext("2d")!;
-      ctx.imageSmoothingEnabled = false;
-      ctx.clearRect(0, 0, cv.width, cv.height);
-      const heroKey = HERO_FRAME[spriteKey];
-      if (heroKey) {
-        ctx.drawImage(hero24Frame(heroKey, 0), 0, 0, cv.width, cv.height);
-      } else {
-        ctx.drawImage(sprite(spriteKey), 0, 0, cv.width, cv.height);
-      }
-    };
-    draw();
-    texReady.then(draw);
-    return () => { alive = false; };
-  }, [spriteKey]);
-  return <canvas ref={ref} className="pixel" width={24} height={24} style={{ width: 24 * scale, height: 24 * scale }} />;
-}
-
-/** rAF 绘制循环容器。adaptive=true 时画布内部分辨率跟随容器尺寸(移动端),
- *  否则固定 width×height(桌面 800x450)。drawRef 指向最新绘制函数, 避免每帧重挂 effect。 */
+/** Retina 高分屏自适应 rAF 画布容器 */
 export function GameCanvas({ width, height, drawRef, adaptive }: {
   width: number;
   height: number;
@@ -132,32 +21,54 @@ export function GameCanvas({ width, height, drawRef, adaptive }: {
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const ref = useRef<HTMLCanvasElement>(null);
+  const sizeRef = useRef({ w: width, h: height });
+
   useEffect(() => {
-    if (!adaptive) return;
+    const cv = ref.current as LogicalCanvas | null;
     const box = boxRef.current;
-    const cv = ref.current;
-    if (!box || !cv) return;
+    if (!cv) return;
+
+    const syncBuffer = (lw: number, lh: number) => {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      sizeRef.current = { w: lw, h: lh };
+      cv.__logicalW = lw;
+      cv.__logicalH = lh;
+      const pw = Math.max(1, Math.round(lw * dpr));
+      const ph = Math.max(1, Math.round(lh * dpr));
+      if (cv.width !== pw || cv.height !== ph) {
+        cv.width = pw;
+        cv.height = ph;
+      }
+    };
+
+    if (!adaptive) {
+      syncBuffer(width, height);
+      return;
+    }
+    if (!box) return;
     const apply = () => {
       const r = box.getBoundingClientRect();
       if (r.width > 40 && r.height > 40) {
-        cv.width = Math.round(r.width);
-        cv.height = Math.round(r.height);
+        syncBuffer(Math.round(r.width), Math.round(r.height));
       }
     };
     apply();
     const ro = new ResizeObserver(apply);
     ro.observe(box);
     return () => ro.disconnect();
-  }, [adaptive]);
+  }, [adaptive, width, height]);
+
   useEffect(() => {
     let raf = 0;
     let last = performance.now();
     const loop = (now: number) => {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
-      const cv = ref.current;
+      const cv = ref.current as LogicalCanvas | null;
       if (cv) {
+        const dpr = cv.width / Math.max(1, sizeRef.current.w);
         const ctx = cv.getContext("2d")!;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         drawRef.current(ctx, dt);
       }
       raf = requestAnimationFrame(loop);
@@ -165,14 +76,15 @@ export function GameCanvas({ width, height, drawRef, adaptive }: {
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
   }, [drawRef]);
+
   return (
     <div className={"canvas-box" + (adaptive ? " adaptive" : "")} ref={boxRef}>
-      <canvas ref={ref} className="pixel" width={width} height={height} />
+      <canvas ref={ref} className="hd-canvas" />
     </div>
   );
 }
 
-// ---------------- 面板 ----------------
+// ---------------- 日志面板 ----------------
 export function LogPanel({ log }: { log: LogLine[] }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -182,26 +94,56 @@ export function LogPanel({ log }: { log: LogLine[] }) {
   return (
     <div className="panel log-panel">
       <div className="log" ref={ref}>
-        {visible.map((l, i) => <div key={i} className={l.kind}>{l.text}</div>)}
+        {visible.map((l, i) => (
+          <div key={i} className={`log-line ${l.kind}`}>
+            <span className="log-bullet">◆</span> {l.text}
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-export function EquipLine({ eq }: { eq: Equipment }) {
-  const setName = eq.setId ? SETS[eq.setId]?.name : null;
-  return (
-    <span className={`r-${rarityClass(eq.rarity)}`}>
-      [{eq.rarity}]{eq.name}
-      <span className="dim"> ({eq.slot}·{eq.kind}, {affixText(eq)})</span>
-      {setName && <span className="set-name"> 〔套装:{setName}〕</span>}
-    </span>
-  );
-}
+// ---------------- 装备行与属性对比 ----------------
 const rarityClass = (r: string) =>
   r === "传说" ? "legend" : r === "稀有" ? "rare" : r === "魔法" ? "magic" : "normal";
 
-// ---------------- 背包 ----------------
+export function EquipLine({ eq }: { eq: Equipment }) {
+  const setName = eq.setId ? SETS[eq.setId]?.name : null;
+  return (
+    <span className={`equip-inline r-${rarityClass(eq.rarity)}`}>
+      <span className="rarity-pill">{eq.rarity}</span>
+      <strong>{eq.name}</strong>
+      <span className="dim"> ({eq.slot}·{eq.kind} | {affixText(eq)})</span>
+      {setName && <span className="set-name"> 〔{setName}〕</span>}
+    </span>
+  );
+}
+
+/** 对比候选装备与当前同槽位已穿装备, 生成直观提升提示 */
+function EquipDelta({ cand, cur }: { cand: Equipment; cur: Equipment | null }) {
+  if (!cur) return <span className="delta-tag up">▲ 空槽可装备</span>;
+  const diffs: Array<{ text: string; up: boolean }> = [];
+  const check = (label: string, a: number, b: number, suffix = "") => {
+    const d = a - b;
+    if (d !== 0) diffs.push({ text: `${label}${d > 0 ? "+" : ""}${d}${suffix}`, up: d > 0 });
+  };
+  check("攻", cand.atk, cur.atk);
+  check("血", cand.hp, cur.hp);
+  check("暴", cand.crit, cur.crit, "%");
+  check("吸", cand.leech, cur.leech, "%");
+  check("蓝", cand.regen, cur.regen);
+  if (!diffs.length) return <span className="delta-tag">≡ 属性持平</span>;
+  return (
+    <span className="delta-wrap">
+      {diffs.slice(0, 3).map((d, i) => (
+        <span key={i} className={`delta-tag ${d.up ? "up" : "down"}`}>{d.text}</span>
+      ))}
+    </span>
+  );
+}
+
+// ---------------- 背包与角色面板 ----------------
 const STAT_NAMES: Record<StatKey, string> = { str: "力量", vit: "体力", mag: "魔力", agi: "敏捷" };
 const STAT_DESC: Record<StatKey, string> = {
   str: `攻击 +${STAT_BONUS.str.atk}/点`,
@@ -210,75 +152,137 @@ const STAT_DESC: Record<StatKey, string> = {
   agi: `暴击 +${STAT_BONUS.agi.crit}%/点`,
 };
 
-export function InventoryPanel({ player, onWear, onDrop, onSpendStat, onOpenSkillTree, onClose }: {
+export function InventoryPanel({ player, spriteKey, onWear, onDrop, onSpendStat, onOpenSkillTree, onClose }: {
   player: PlayerState;
+  spriteKey?: string;
   onWear: (eq: Equipment) => void;
   onDrop: (eq: Equipment) => void;
   onSpendStat: (key: StatKey) => void;
   onOpenSkillTree: () => void;
   onClose: () => void;
 }) {
+  const [, bump] = useState(0);
+  useEffect(() => onHdReady(() => bump((x) => x + 1)), []);
   const sets = setBonuses(player);
+  const portrait = spriteKey ? hdUrl(spriteKey) : undefined;
+
   return (
     <Overlay onClose={onClose}>
-      <h3>背包 {player.bag.length}/10</h3>
-
-      <div className="stat-block">
+      <div className="modal-head">
+        <h3>角色与行囊 <span className="dim">({player.bag.length}/10)</span></h3>
         <div className="row">
-          <strong className="gold">属性点 {player.statPoints}</strong>
-          <button className="stat-tree-btn" onClick={onOpenSkillTree}>技能树 (K)</button>
-          <span className="dim" style={{ fontSize: 12 }}>技能点 {player.skillPoints}</span>
-        </div>
-        {(["str", "vit", "mag", "agi"] as const).map((key) => (
-          <div className="item-line stat-line" key={key}>
-            <button
-              onClick={() => onSpendStat(key)}
-              disabled={player.statPoints <= 0}
-              title={STAT_DESC[key]}
-            >+</button>
-            <span>{STAT_NAMES[key]} <strong>{player.stats[key]}</strong></span>
-            <span className="dim" style={{ fontSize: 11 }}>{STAT_DESC[key]}</span>
-          </div>
-        ))}
-        <div className="dim" style={{ fontSize: 12 }}>
-          攻击 {playerAtk(player)} · 生命 {maxHp(player)} · 暴击 {playerCrit(player)}% · 吸血 {playerLeech(player)}% · 回蓝 {playerRegen(player)}
+          <button className="stat-tree-btn" onClick={onOpenSkillTree}>
+            技能树 (K) {player.skillPoints > 0 && <span className="gold">+{player.skillPoints}</span>}
+          </button>
+          <button className="close-x" onClick={onClose}>✕</button>
         </div>
       </div>
 
+      {/* 角色属性总览与加点 */}
+      <div className="char-sheet">
+        {portrait && (
+          <div className="char-portrait-card">
+            <img src={portrait} alt={player.cls} />
+            <div className="char-portrait-caption">Lv.{player.level} {player.cls}</div>
+          </div>
+        )}
+        <div className="stat-block grow">
+          <div className="row" style={{ justifyContent: "space-between", marginBottom: 6 }}>
+            <span className="section-sub">基础潜能</span>
+            <span className={player.statPoints > 0 ? "gold" : "dim"} style={{ fontSize: 12, fontWeight: 600 }}>
+              可用属性点: {player.statPoints}
+            </span>
+          </div>
+          <div className="stat-grid">
+            {(["str", "vit", "mag", "agi"] as const).map((key) => (
+              <div className="stat-card" key={key}>
+                <StatBadge stat={key} />
+                <div className="grow">
+                  <div className="stat-title">{STAT_NAMES[key]} <strong>{player.stats[key]}</strong></div>
+                  <div className="dim" style={{ fontSize: 11 }}>{STAT_DESC[key]}</div>
+                </div>
+                <button
+                  className="stat-plus"
+                  onClick={() => onSpendStat(key)}
+                  disabled={player.statPoints <= 0}
+                  title={`投入 1 点${STAT_NAMES[key]}`}
+                >+</button>
+              </div>
+            ))}
+          </div>
+          <div className="derived-bar">
+            <span>⚔ 攻击 <b>{playerAtk(player)}</b></span>
+            <span>♥ 生命 <b>{maxHp(player)}</b></span>
+            <span>⚡ 暴击 <b>{playerCrit(player)}%</b></span>
+            <span>🩸 吸血 <b>{playerLeech(player)}%</b></span>
+            <span>✦ 回蓝 <b>{playerRegen(player)}</b>/回</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 已穿戴装备三槽卡片 */}
+      <div className="section-sub" style={{ margin: "10px 0 6px" }}>当前穿戴</div>
+      <div className="equip-slots-grid">
+        {(["武器", "护甲", "饰品"] as Slot[]).map((slot) => {
+          const eq = player.equip[slot];
+          return (
+            <div className={`equipped-card ${eq ? `r-border-${rarityClass(eq.rarity)}` : ""}`} key={slot}>
+              <ItemIconBox eq={eq} emptySlot={slot} size={44} />
+              <div className="equipped-meta">
+                <div className="dim" style={{ fontSize: 11 }}>{slot}槽位</div>
+                {eq ? (
+                  <>
+                    <div className={`r-${rarityClass(eq.rarity)}`} style={{ fontWeight: 700, fontSize: 13 }}>{eq.name}</div>
+                    <div className="dim" style={{ fontSize: 11 }}>{affixText(eq)}</div>
+                  </>
+                ) : (
+                  <div className="dim" style={{ fontSize: 12 }}>未装备</div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 套装激活状态 */}
       {sets.lines.length > 0 && (
         <div className="set-block">
           {sets.lines.map((l) => (
-            <div key={l.name} className="item-line">
-              <span className="set-name">〔{l.name} {l.count}/{l.need}〕</span>
+            <div key={l.name} className="set-line">
+              <span className="set-name">✦ 〔{l.name} {l.count}/{l.need}〕</span>
               <span className="dim" style={{ fontSize: 12 }}>{l.text}</span>
             </div>
           ))}
         </div>
       )}
 
-      <hr style={{ border: "none", borderTop: `1px solid var(--line)`, margin: "8px 0" }} />
-      {(["武器", "护甲", "饰品"] as const).map((slot) => (
-        <div className="item-line" key={slot}>
-          <span className="dim">已穿[{slot}]:</span>{" "}
-          {player.equip[slot] ? <EquipLine eq={player.equip[slot]!} /> : <span className="dim">(空)</span>}
-        </div>
-      ))}
-      <hr style={{ border: "none", borderTop: `1px solid var(--line)`, margin: "8px 0" }} />
-      {player.bag.length === 0 && <div className="dim">背包是空的。</div>}
-      {player.bag.map((eq, i) => (
-        <div className="item-line" key={i}>
-          <button onClick={() => onWear(eq)} title="穿上">穿{(i + 1) % 10}</button>
-          <button onClick={() => onDrop(eq)} title="丢弃">丢</button>
-          <EquipLine eq={eq} />
-        </div>
-      ))}
-      {player.bag.length > 0 && (
-        <div className="dim" style={{ fontSize: 11, marginTop: 6 }}>
-          点击"穿N"穿上, 或按对应数字键 1-9
-        </div>
-      )}
-      <div className="row" style={{ marginTop: 10 }}>
-        <button onClick={onClose}>关闭 (I)</button>
+      {/* 背包物品列表 */}
+      <div className="section-sub" style={{ margin: "10px 0 6px" }}>
+        行囊物品 {player.bag.length > 0 && <span className="dim" style={{ fontWeight: 400 }}>(按数字键 1-9/0 快速穿戴)</span>}
+      </div>
+      {player.bag.length === 0 && <div className="empty-bag">行囊空空如也，去地牢深处搜刮战利品吧。</div>}
+      <div className="bag-list">
+        {player.bag.map((eq, i) => (
+          <div className="bag-card" key={i}>
+            <ItemIconBox eq={eq} size={42} />
+            <div className="bag-info grow">
+              <div className="bag-title-row">
+                <EquipLine eq={eq} />
+                <EquipDelta cand={eq} cur={player.equip[eq.slot]} />
+              </div>
+            </div>
+            <div className="bag-actions">
+              <button className="primary" onClick={() => onWear(eq)} title="穿戴此装备">
+                装备 <span className="key-hint">{(i + 1) % 10}</span>
+              </button>
+              <button className="danger-subtle" onClick={() => onDrop(eq)} title="丢弃">丢弃</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="row" style={{ marginTop: 12, justifyContent: "flex-end" }}>
+        <button onClick={onClose}>关闭 (I / Esc)</button>
       </div>
     </Overlay>
   );
@@ -294,45 +298,65 @@ export function SkillTreePanel({ player, onLearn, onClose }: {
   const tree = SKILL_TREES[player.cls] ?? [];
   const tiers: Array<typeof tree> = [[], [], []];
   for (const n of tree) tiers[n.tier - 1].push(n);
-  const unlocked = (tier: number) => tier === 1 || player.learned.some((id) => tree.find((n) => n.id === id)?.tier === tier - 1);
+  const unlocked = (tier: number) =>
+    tier === 1 || player.learned.some((id) => tree.find((n) => n.id === id)?.tier === tier - 1);
+
   return (
     <Overlay onClose={onClose}>
-      <h3>技能树 · {player.cls}</h3>
-      <div className="dim" style={{ marginBottom: 8 }}>
-        技能点 <span className="gold">{player.skillPoints}</span> · 学习下层需先学上层至少 1 项
+      <div className="modal-head">
+        <h3>职业天赋树 · {player.cls}</h3>
+        <button className="close-x" onClick={onClose}>✕</button>
       </div>
-      {tiers.map((nodes, i) => (
-        <div key={i} className="tier-block">
-          <div className="dim" style={{ fontSize: 12, margin: "4px 0" }}>— 第 {i + 1} 层 —</div>
-          <div className="skill-grid">
-            {nodes.map((node) => {
-              const learned = player.learned.includes(node.id);
-              const canLearn = !learned && unlocked(node.tier) && player.skillPoints >= node.cost;
-              return (
-                <div key={node.id} className={`skill-card ${learned ? "learned" : canLearn ? "can" : "locked"}`}>
-                  <div className="row" style={{ justifyContent: "space-between" }}>
-                    <strong>{node.name}</strong>
-                    <span className="dim" style={{ fontSize: 11 }}>{node.type === "active" ? "主动" : "被动"} · {node.cost}点</span>
+      <div className="dim" style={{ marginBottom: 10, fontSize: 13 }}>
+        可用技能点: <strong className="gold">{player.skillPoints}</strong> · 解锁下一阶需习得上一阶任意一项
+      </div>
+      <div className="skill-tree-wrap">
+        {tiers.map((nodes, i) => (
+          <div key={i} className="tier-block">
+            {i > 0 && <div className={`tier-connector ${unlocked(i + 1) ? "lit" : ""}`} />}
+            <div className="tier-label">第 {i + 1} 阶 · {i === 2 ? "终极奥义 (替换主动战技)" : "专精被动"}</div>
+            <div className="skill-grid">
+              {nodes.map((node) => {
+                const learned = player.learned.includes(node.id);
+                const canLearn = !learned && unlocked(node.tier) && player.skillPoints >= node.cost;
+                const iconKind = node.active?.kind ?? "passive";
+                return (
+                  <div key={node.id} className={`skill-card ${learned ? "learned" : canLearn ? "can" : "locked"}`}>
+                    <div className="skill-card-top">
+                      <div className="skill-icon-badge">
+                        <ActionIcon kind={iconKind} size={28} />
+                      </div>
+                      <div className="grow">
+                        <div className="row" style={{ justifyContent: "space-between" }}>
+                          <strong>{node.name}</strong>
+                          <span className="skill-cost-tag">
+                            {node.type === "active" ? "主动" : "被动"} · {node.cost}点
+                          </span>
+                        </div>
+                        <div className="dim" style={{ fontSize: 12, marginTop: 2 }}>{node.desc}</div>
+                      </div>
+                    </div>
+                    {learned ? (
+                      <div className="learned-pill">✦ 已习得</div>
+                    ) : (
+                      <button
+                        className="primary"
+                        disabled={!canLearn}
+                        onClick={() => { onLearn(node); force((x) => x + 1); }}
+                        style={{ marginTop: 8, width: "100%" }}
+                      >
+                        {unlocked(node.tier) ? (canLearn ? "领悟天赋" : "技能点不足") : "需先领悟上阶"}
+                      </button>
+                    )}
                   </div>
-                  <div className="dim" style={{ fontSize: 12 }}>{node.desc}</div>
-                  {!learned && (
-                    <button
-                      className="primary"
-                      disabled={!canLearn}
-                      onClick={() => { onLearn(node); force((x) => x + 1); }}
-                      style={{ marginTop: 6, width: "100%" }}
-                    >
-                      {learned ? "已学习" : unlocked(node.tier) ? (canLearn ? "学习" : "技能点不足") : "需先学上层"}
-                    </button>
-                  )}
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
-        </div>
-      ))}
-      <div className="row" style={{ marginTop: 10 }}>
-        <button onClick={onClose}>关闭 (Esc)</button>
+        ))}
+      </div>
+      <div className="row" style={{ marginTop: 12, justifyContent: "flex-end" }}>
+        <button onClick={onClose}>关闭 (K / Esc)</button>
       </div>
     </Overlay>
   );
@@ -358,54 +382,98 @@ export function MerchantPanel({ player, offer, onBuyPotion, onBuyMana, onBuyEq, 
   onSellAll: () => void;
   onClose: () => void;
 }) {
-  const sold = offer.kind === "camp";
+  const isCamp = offer.kind === "camp";
+  const bagVal = player.bag.reduce((s, e) => s + e.value, 0);
   return (
     <Overlay onClose={onClose}>
-      <h3>{sold ? "营地商人" : "披着斗篷的流浪商人"}</h3>
-      <div className="dim" style={{ marginBottom: 8 }}>
-        {sold ? "'补给充足, 看看货?'" : "'看看货? 价格公道。'"} 金币 {player.gold}
+      <div className="modal-head">
+        <h3>{isCamp ? "篝火营地行商" : "幽暗斗篷流浪商人"}</h3>
+        <span className="gold" style={{ fontWeight: 700 }}>◈ {player.gold} 金</span>
       </div>
-      <div className="item-line">
-        <button onClick={onBuyEq} disabled={player.gold < offer.eqPrice || player.bag.length >= 10}>买</button>
-        <EquipLine eq={offer.eq} /> —— {offer.eqPrice}金
+      <div className="dim" style={{ marginBottom: 10 }}>
+        {isCamp ? "“营地补给充足，挑件称手的兵器再下潜吧。”" : "“嘘……深渊里的好货，错过这村可就没这店了。”"}
       </div>
-      <div className="item-line">
-        <button onClick={onBuyPotion} disabled={player.gold < offer.potionPrice}>买</button>
-        血瓶×{offer.potionCount} —— {offer.potionPrice}金
+
+      <div className="shop-list">
+        <div className="bag-card">
+          <ItemIconBox eq={offer.eq} size={46} />
+          <div className="grow">
+            <EquipLine eq={offer.eq} />
+            <div style={{ marginTop: 3 }}>
+              <EquipDelta cand={offer.eq} cur={player.equip[offer.eq.slot]} />
+            </div>
+          </div>
+          <button
+            className="primary"
+            onClick={onBuyEq}
+            disabled={player.gold < offer.eqPrice || player.bag.length >= 10}
+          >
+            购买 · {offer.eqPrice}金
+          </button>
+        </div>
+
+        <div className="bag-card">
+          <div className="skill-icon-badge"><ActionIcon kind="hp" size={28} /></div>
+          <div className="grow">
+            <strong>生命药剂 ×{offer.potionCount}</strong>
+            <div className="dim" style={{ fontSize: 12 }}>当前持有: {player.potions["血瓶"]} 瓶</div>
+          </div>
+          <button onClick={onBuyPotion} disabled={player.gold < offer.potionPrice}>
+            购买 · {offer.potionPrice}金
+          </button>
+        </div>
+
+        <div className="bag-card">
+          <div className="skill-icon-badge"><ActionIcon kind="mp" size={28} /></div>
+          <div className="grow">
+            <strong>法力药剂 ×{offer.manaCount}</strong>
+            <div className="dim" style={{ fontSize: 12 }}>当前持有: {player.potions["蓝瓶"]} 瓶</div>
+          </div>
+          <button onClick={onBuyMana} disabled={player.gold < offer.manaPrice}>
+            购买 · {offer.manaPrice}金
+          </button>
+        </div>
+
+        <div className="bag-card">
+          <div className="skill-icon-badge"><ActionIcon kind="passive" size={26} /></div>
+          <div className="grow">
+            <strong>差遣宠物回城清包</strong>
+            <div className="dim" style={{ fontSize: 12 }}>一键售出背包内全部 {player.bag.length} 件未穿戴装备</div>
+          </div>
+          <button onClick={onSellAll} disabled={player.bag.length === 0}>
+            全卖 · +{bagVal}金
+          </button>
+        </div>
       </div>
-      <div className="item-line">
-        <button onClick={onBuyMana} disabled={player.gold < offer.manaPrice}>买</button>
-        蓝瓶×{offer.manaCount} —— {offer.manaPrice}金
-      </div>
-      <div className="item-line">
-        <button onClick={onSellAll} disabled={player.bag.length === 0}>卖</button>
-        <span className="dim">把背包装备全部卖掉 (价值 {player.bag.reduce((s, e) => s + e.value, 0)} 金)</span>
-      </div>
-      <div className="row" style={{ marginTop: 10 }}>
+
+      <div className="row" style={{ marginTop: 12, justifyContent: "flex-end" }}>
         <button onClick={onClose}>离开 (Esc)</button>
       </div>
     </Overlay>
   );
 }
 
-// ---------------- 传送 ----------------
+// ---------------- 传送门 ----------------
 export function PortalPanel({ onGo, onClose }: { onGo: (floor: number) => void; onClose: () => void }) {
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => ref.current?.focus(), []);
   return (
     <Overlay onClose={onClose}>
-      <h3>传送门</h3>
-      <div className="dim" style={{ marginBottom: 8 }}>跳到第几层? (1~999, 单向有去无回)</div>
+      <div className="modal-head">
+        <h3>远古虚空传送阵</h3>
+        <button className="close-x" onClick={onClose}>✕</button>
+      </div>
+      <div className="dim" style={{ marginBottom: 12 }}>
+        输入目标层数 (1 ~ 999)。虚空折跃单向不可逆，深层魔物极为凶险。
+      </div>
       <div className="row">
         <input
           ref={ref}
+          className="portal-input"
           type="number"
           min={1}
           max={999}
-          style={{
-            background: "var(--panel2)", border: "2px solid var(--line2)", color: "var(--text)",
-            font: "inherit", padding: "4px 8px", width: 100,
-          }}
+          placeholder="层数"
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               const v = Number(ref.current?.value);
@@ -416,113 +484,215 @@ export function PortalPanel({ onGo, onClose }: { onGo: (floor: number) => void; 
         <button className="primary" onClick={() => {
           const v = Number(ref.current?.value);
           if (v >= 1 && v <= 999) onGo(v);
-        }}>传送</button>
+        }}>启动折跃</button>
         <button onClick={onClose}>取消 (Esc)</button>
       </div>
     </Overlay>
   );
 }
 
-// ---------------- 掉落 ----------------
-export function LootPanel({ eq, bagFull, onTake, onSkip }: {
+// ---------------- 战利品拾取弹窗 ----------------
+export function LootPanel({ eq, curEquipped, bagFull, onTake, onSkip }: {
   eq: Equipment;
+  curEquipped?: Equipment | null;
   bagFull: boolean;
   onTake: () => void;
   onSkip: () => void;
 }) {
   return (
     <Overlay onClose={onSkip}>
-      <h3>掉落装备</h3>
-      <div className="item-line" style={{ margin: "8px 0", fontSize: 15 }}>
-        <EquipLine eq={eq} />
-        <span className="dim"> 价值 {eq.value} 金</span>
+      <div className="modal-head">
+        <h3>✦ 发现战利品</h3>
+        <span className="gold" style={{ fontSize: 13 }}>估值 {eq.value} 金</span>
       </div>
-      {bagFull && <div className="dim">背包已满, 只能放弃。</div>}
-      <div className="row" style={{ marginTop: 10 }}>
-        <button className="primary" onClick={onTake} disabled={bagFull}>拾取 (Y)</button>
-        <button onClick={onSkip}>放弃 (Esc)</button>
+      <div className={`loot-showcase r-border-${rarityClass(eq.rarity)}`}>
+        <ItemIconBox eq={eq} size={62} />
+        <div className="grow">
+          <div style={{ fontSize: 16 }}>
+            <EquipLine eq={eq} />
+          </div>
+          <div style={{ marginTop: 6 }}>
+            <EquipDelta cand={eq} cur={curEquipped ?? null} />
+          </div>
+          {curEquipped && (
+            <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>
+              当前已穿: [{curEquipped.rarity}]{curEquipped.name} ({affixText(curEquipped)})
+            </div>
+          )}
+        </div>
+      </div>
+      {bagFull && <div className="hp-color" style={{ fontSize: 12, marginTop: 6 }}>背包已满 (10/10)，无法继续拾取。</div>}
+      <div className="row" style={{ marginTop: 14, justifyContent: "flex-end" }}>
+        <button className="primary" onClick={onTake} disabled={bagFull}>收入行囊 (Y)</button>
+        <button onClick={onSkip}>遗弃 (Esc)</button>
       </div>
     </Overlay>
   );
 }
 
-// ---------------- 场景屏 ----------------
+// ---------------- 通用遮罩弹窗 ----------------
 export function Overlay({ children, onClose }: { children: React.ReactNode; onClose?: () => void }) {
   return (
-    <div className="overlay-backdrop" onClick={onClose ? (e) => { if (e.target === e.currentTarget) onClose(); } : undefined}>
+    <div
+      className="overlay-backdrop"
+      onClick={onClose ? (e) => { if (e.target === e.currentTarget) onClose(); } : undefined}
+    >
       <div className="overlay-panel">{children}</div>
     </div>
   );
 }
 
+// ---------------- 标题主界面 ----------------
 export function TitleScreen({ hasSave, saveInfo, onContinue, onNew }: {
   hasSave: boolean;
   saveInfo: string;
   onContinue: () => void;
   onNew: () => void;
 }) {
+  const [, bump] = useState(0);
+  useEffect(() => onHdReady(() => bump((x) => x + 1)), []);
+  const banner = hdUrl("title_banner");
+
   return (
     <div className="title-screen">
-      <h1>火 炬 之 光</h1>
-      <div className="dim" style={{ marginBottom: 16 }}>像素版 · 暗黑系刷宝 roguelite · 下潜越深, 怪越强, 掉落越好</div>
-      <div className="title-backdrop">
-        <TitleBackdrop />
+      <div className="title-hero-card">
+        {banner && <img src={banner} alt="火炬之光" className="title-hero-img" />}
+        <div className="title-hero-overlay">
+          <div className="title-eyebrow">TORCHLIGHT · ABYSSAL CHRONICLES</div>
+          <h1>火 炬 之 光</h1>
+          <p className="title-sub">暗黑刷宝 Roguelite · 深入无尽深渊，搜集传世神装</p>
+        </div>
       </div>
-      <div className="row" style={{ justifyContent: "center", gap: 12, marginTop: 16 }}>
-        {hasSave && <button className="primary" onClick={onContinue}>继续冒险 ({saveInfo})</button>}
-        <button onClick={onNew} className={hasSave ? "" : "primary"}>新的冒险</button>
+
+      <div className="title-cta-row">
+        {hasSave && (
+          <button className="primary btn-lg" onClick={onContinue}>
+            继续冒险 <span className="save-pill">{saveInfo}</span>
+          </button>
+        )}
+        <button onClick={onNew} className={hasSave ? "btn-lg" : "primary btn-lg"}>
+          开启新的远征
+        </button>
       </div>
-      <div className="dim" style={{ marginTop: 24, fontSize: 12 }}>
-        <span className="kbd">WASD/方向键</span> 移动 · <span className="kbd">E</span> 交互 · <span className="kbd">I</span> 背包 · <span className="kbd">1-4</span> 战斗行动
+
+      <div className="title-keys">
+        <span><kbd className="kbd">WASD / 方向键</kbd> 移动</span>
+        <span><kbd className="kbd">E / 空格</kbd> 交互</span>
+        <span><kbd className="kbd">I</kbd> 角色行囊</span>
+        <span><kbd className="kbd">K</kbd> 技能树</span>
+        <span><kbd className="kbd">1 - 4</kbd> 战斗施放</span>
       </div>
     </div>
   );
 }
 
-export function CreateScreen({ classes, onPick }: { classes: Record<string, ClassDef>; onPick: (key: string) => void }) {
+// ---------------- 选人界面 ----------------
+export function CreateScreen({ classes, onPick, onBack }: {
+  classes: Record<string, ClassDef>;
+  onPick: (key: string) => void;
+  onBack?: () => void;
+}) {
+  const [, bump] = useState(0);
+  useEffect(() => onHdReady(() => bump((x) => x + 1)), []);
+
   return (
-    <div className="title-screen">
-      <h1 style={{ fontSize: 22, letterSpacing: 4 }}>选择你的职业</h1>
-      <div className="row" style={{ justifyContent: "center", gap: 14, marginTop: 20, alignItems: "stretch" }}>
-        {Object.entries(classes).map(([key, c]) => (
-          <div key={key} className="class-card" onClick={() => onPick(key)}>
-            <SpriteView spriteKey={c.sprite} scale={6} />
-            <div style={{ color: "var(--gold)", fontSize: 16 }}>[{key}] {c.name}</div>
-            <div className="dim">❤{c.hp} ⚔{c.atk} ✦{c.mp}</div>
-            <div style={{ marginTop: 6 }}>
-              技能: <span className="heal">{c.skill.name}</span>({c.skill.cost}蓝)
-              <div className="dim" style={{ fontSize: 12 }}>{c.skill.desc}</div>
+    <div className="create-screen">
+      <div className="create-header">
+        <div className="title-eyebrow">CHOOSE YOUR CHAMPION</div>
+        <h1>选 择 你 的 英 雄</h1>
+        <div className="dim">三大职业各具专属战技与三阶天赋分支，死亡将抹去本局进度</div>
+      </div>
+
+      <div className="class-cards-row">
+        {Object.entries(classes).map(([key, c]) => {
+          const img = hdUrl(c.sprite);
+          const meta = CLASS_META[c.name] ?? { role: "深渊冒险者", aura: "none" };
+          return (
+            <div key={key} className="class-card" onClick={() => onPick(key)}>
+              <div className="class-art-box" style={{ background: meta.aura }}>
+                {img && <img src={img} alt={c.name} className="class-art-img" />}
+              </div>
+              <div className="class-body">
+                <div className="class-name-row">
+                  <span className="class-title">{c.name}</span>
+                  <span className="class-key">[{key}]</span>
+                </div>
+                <div className="class-role">{meta.role}</div>
+                <div className="class-stats">
+                  <span>♥ 生命 <b>{c.hp}</b></span>
+                  <span>⚔ 攻击 <b>{c.atk}</b></span>
+                  <span>✦ 法力 <b>{c.mp}</b></span>
+                </div>
+                <div className="class-skill-box">
+                  <ActionIcon kind={c.skill.kind ?? "flame"} size={28} />
+                  <div>
+                    <div className="class-skill-title">
+                      {c.skill.name} <span className="mp-color">({c.skill.cost}蓝)</span>
+                    </div>
+                    <div className="dim" style={{ fontSize: 12 }}>{c.skill.desc}</div>
+                  </div>
+                </div>
+                <button className="primary class-pick-btn">踏入地牢</button>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
+
+      {onBack && (
+        <div style={{ marginTop: 18 }}>
+          <button onClick={onBack}>返回标题</button>
+        </div>
+      )}
     </div>
   );
 }
 
-export function DeadScreen({ player, floor, best, onRetry, onTitle }: {
+// ---------------- 陨落结算界面 ----------------
+export function DeadScreen({ player, spriteKey, floor, best, onRetry, onTitle }: {
   player: PlayerState;
+  spriteKey?: string;
   floor: number;
   best: Equipment | null;
   onRetry: () => void;
   onTitle: () => void;
 }) {
+  const portrait = spriteKey ? hdUrl(spriteKey) : undefined;
   return (
     <div className="dead-screen">
-      <h1>════ 你倒在了第 {floor} 层 ════</h1>
-      <div style={{ margin: "14px 0", fontSize: 15 }}>
-        职业: {player.cls} · 等级: {player.level} · 击杀: {player.kills} 只怪物
-      </div>
-      <div style={{ marginBottom: 8 }}>
-        金币: {player.gold} · 遗物: {best ? <EquipLine eq={best} /> : <span className="dim">无</span>}
-      </div>
-      <div className="dim" style={{ marginBottom: 24 }}>存档已抹去, roguelite 规矩。</div>
-      <div className="row" style={{ justifyContent: "center" }}>
-        <button className="primary" onClick={onRetry}>再来一局</button>
-        <button onClick={onTitle}>回到标题</button>
+      <div className="dead-card">
+        <div className="title-eyebrow" style={{ color: "#f87171" }}>YOU HAVE FALLEN</div>
+        <h1>英 魂 陨 落 · 第 {floor} 层</h1>
+        {portrait && (
+          <div className="dead-portrait">
+            <img src={portrait} alt={player.cls} />
+          </div>
+        )}
+        <div className="dead-stats-grid">
+          <div className="dead-stat"><span>英雄职业</span><strong>{player.cls}</strong></div>
+          <div className="dead-stat"><span>最终等级</span><strong>Lv.{player.level}</strong></div>
+          <div className="dead-stat"><span>斩杀魔物</span><strong>{player.kills} 只</strong></div>
+          <div className="dead-stat"><span>遗留金币</span><strong className="gold">{player.gold}</strong></div>
+        </div>
+        <div className="dead-relic">
+          <div className="dim" style={{ fontSize: 12, marginBottom: 6 }}>本局最高价值遗物</div>
+          {best ? (
+            <div className="row" style={{ justifyContent: "center" }}>
+              <ItemIconBox eq={best} size={42} />
+              <EquipLine eq={best} />
+            </div>
+          ) : (
+            <span className="dim">未留下传世装备</span>
+          )}
+        </div>
+        <div className="dim" style={{ margin: "14px 0 20px", fontSize: 12 }}>
+          深渊吞噬了你的足迹，存档已依 Roguelite 法则抹除。
+        </div>
+        <div className="row" style={{ justifyContent: "center", gap: 12 }}>
+          <button className="primary btn-lg" onClick={onRetry}>再度远征</button>
+          <button className="btn-lg" onClick={onTitle}>返回主菜单</button>
+        </div>
       </div>
     </div>
   );
 }
-
-// ---------------- 战斗 ----------------

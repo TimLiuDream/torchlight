@@ -39,15 +39,24 @@ export function livingTargets(state: CombatState): CombatMonster[] {
   return state.monsters.filter((m) => m.hp > 0);
 }
 
+function monsterFloatPos(idx: number, total: number): [number, number] {
+  if (total <= 1) return [0.71, 0.42];
+  if (total === 2) return idx === 0 ? [0.64, 0.44] : [0.81, 0.39];
+  const x = 0.56 + 0.32 * (idx / Math.max(1, total - 1));
+  const y = idx % 2 === 0 ? 0.45 : 0.39;
+  return [x, y];
+}
+
 function dealDamage(state: CombatState, player: PlayerState, target: CombatMonster, dmg: number, crit: boolean): void {
   target.hp -= dmg;
   target.hurtFlash = 0.25;
   log(state, `你对 ${target.name} 造成 ${dmg} 点伤害${crit ? "(暴击!)" : ""}`, crit ? "crit" : "damage");
-  const idx = state.monsters.indexOf(target);
+  const idx = Math.max(0, state.monsters.indexOf(target));
+  const [fx, fy] = monsterFloatPos(idx, state.monsters.length);
   state.floats.push({
     text: `${dmg}${crit ? "!" : ""}`,
-    x: 0.55 + idx * 0.1,
-    y: 0.42,
+    x: fx,
+    y: fy,
     color: crit ? "#ffd23e" : "#ffffff",
     t: 1.0,
   });

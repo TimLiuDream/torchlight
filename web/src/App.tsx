@@ -31,8 +31,8 @@ type OverlayKind = "inv" | "skill" | "merchant" | "portal" | "loot" | null;
 // 经由函数返回值重新读取以获得联合类型。
 const phaseOf = (s: CombatState) => s.phase;
 
-const CANVAS_W = 800;
-const CANVAS_H = 450;
+const CANVAS_W = 880;
+const CANVAS_H = 495;
 // 触屏设备: 画布内部分辨率跟随容器, 游戏区撑满屏幕
 const IS_TOUCH = typeof window !== "undefined" &&
   (window.matchMedia("(pointer: coarse)").matches || "ontouchstart" in window);
@@ -180,7 +180,7 @@ export default function App() {
     // 战斗演出锚点(与 renderer 布局同一坐标系), 目标取第一只活怪
     const targetIdx = Math.max(0, state.monsters.findIndex((m) => m.hp > 0));
     const { w: CW, h: CH } = gameCanvasSize();
-    const anchor = combatAnchor({ width: CW, height: CH }, targetIdx);
+    const anchor = combatAnchor({ width: CW, height: CH }, targetIdx, state.monsters.length);
     const px = anchor.px;
     const py = anchor.py;
     const tx = anchor.tx;
@@ -192,20 +192,23 @@ export default function App() {
       attackAnim();
       const isCrit = res.crit;
       if (action.kind === "skill") {
-        if (p.cls === "灰烬法师") fx.flame(px + 40, py - 60, tx, ty);
-        else if (p.cls === "狂战士") fx.whirl(tx, ty);
-        else { fx.repairSpark(px + 40, py - 50); fx.heal(px + 40, py - 60); }
+        const sk = p.skill.kind;
+        if (sk === "aoe") fx.meteorRain(CW * 0.72, ty);
+        else if (sk === "whirl" || sk === "leechWhirl") fx.whirl(tx, ty, sk === "leechWhirl");
+        else if (sk === "drone" || sk === "healBig") { fx.repairSpark(px, py); fx.heal(px, py); }
+        else if (sk === "summon") { fx.repairSpark(px + 20, py - 10); fx.meteorRain(CW * 0.72, ty); }
+        else fx.flame(px, py, tx, ty);
       }
       fx.hit(tx, ty);
       if (isCrit) {
         fx.crit(tx, ty);
-        shakeCam(9);
-        hitStopFx(0.05);
+        shakeCam(9.5);
+        hitStopFx(0.055);
       } else {
-        shakeCam(3.5);
+        shakeCam(3.8);
       }
     } else if (action.kind === "potion" && action.which === "血瓶") {
-      fx.heal(px + 40, py - 60);
+      fx.heal(px, py);
     }
 
     if (phaseOf(state) === "won") { finishCombat(); return; }
@@ -467,6 +470,11 @@ export default function App() {
       if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(k)) e.preventDefault();
       const dir = DIR_KEYS[k];
       if (dir) { keysDown.current.add(dir); return; }
+      if (scene === "create") {
+        if (k === "1" || k === "2" || k === "3") beginRun(k);
+        else if (k === "escape") setScene("title");
+        return;
+      }
       if (scene === "play") {
         if (overlay === "loot") {
           if (k === "y") takeLoot();
@@ -575,7 +583,7 @@ export default function App() {
   if (scene === "create") {
     return (
       <div className="game-wrap">
-        <CreateScreen classes={CLASSES} onPick={beginRun} />
+        <CreateScreen classes={CLASSES} onPick={beginRun} onBack={() => setScene("title")} />
       </div>
     );
   }
@@ -590,6 +598,7 @@ export default function App() {
       <div className="game-wrap">
         <DeadScreen
           player={p}
+          spriteKey={spriteKeyRef.current}
           floor={floorRef.current}
           best={best}
           onRetry={startNewRun}
@@ -609,19 +618,17 @@ export default function App() {
     <div className="game-wrap">
       <div className="hud-top">
         <span className="hud-floor">
-          第 {floorRef.current} 层
+          <span className="floor-num">第 {floorRef.current} 层</span>
+          <span className="floor-theme"> · {map.isCamp ? "篝火营地" : dungeonThemeName()}</span>
           {isBossFloor(floorRef.current) && <span className="hp-color"> · 首领!</span>}
-          {map.isCamp && <span className="heal"> · 营地</span>}
         </span>
         <div className="grow" style={{ textAlign: "center" }}>
           {combat && boss ? (
-            <>
-              <BossBar name={`${boss.name}  ·  ${combat.round + 1}回合`} hp={boss.hp} maxHp={boss.maxHp} />
-            </>
+            <BossBar name={`${boss.name}  ·  第 ${combat.round + 1} 回合`} hp={boss.hp} maxHp={boss.maxHp} />
           ) : (
-            <span className="dim" style={{ fontSize: 12 }}>
-              <span className="kbd">WASD</span> 移动 · <span className="kbd">E</span> 交互 · <span className="kbd">I</span> 背包 · <span className="kbd">K</span> 技能树
-              {p.level < recLevel(floorRef.current) && <span className="hp-color"> · 等级低于建议值, 小心!</span>}
+            <span className="hud-hints">
+              <span className="kbd">WASD</span> 移动 · <span className="kbd">E</span> 交互 · <span className="kbd">I</span> 行囊 · <span className="kbd">K</span> 天赋
+              {p.level < recLevel(floorRef.current) && <span className="hp-color"> · 等级偏低，谨慎推进!</span>}
             </span>
           )}
         </div>
@@ -639,15 +646,23 @@ export default function App() {
       </div>
       <GameCanvas width={CANVAS_W} height={CANVAS_H} drawRef={drawRef} adaptive={IS_TOUCH} />
       <div className="hud-bottom">
-        <Orb value={p.hp} max={maxHp(p)} color="linear-gradient(#ff7a6b, #c22323)" glow="#ff4b4b" />
-        <ActionBar player={p} inCombat={!!combat} onAction={onCombatAction} />
-        <Orb value={p.mp} max={p.maxMp} color="linear-gradient(#5b9cff, #1c3f9a)" glow="#5b9cff" />
+        <Orb value={p.hp} max={maxHp(p)} color="linear-gradient(180deg, #ff6b5b 0%, #b91c1c 65%, #690b0b 100%)" glow="#ef4444" label="生命" />
+        <ActionBar
+          player={p}
+          spriteKey={spriteKeyRef.current}
+          inCombat={!!combat}
+          onAction={onCombatAction}
+          onOpenInv={() => { setOverlay(overlay === "inv" ? null : "inv"); force(); }}
+          onOpenSkill={() => { setOverlay(overlay === "skill" ? null : "skill"); force(); }}
+        />
+        <Orb value={p.mp} max={p.maxMp} color="linear-gradient(180deg, #60a5fa 0%, #1d4ed8 65%, #112266 100%)" glow="#3b82f6" label="法力" />
       </div>
       <LogPanel log={combat ? combat.log : dungeonLogRef.current} />
 
       {overlay === "inv" && (
         <InventoryPanel
           player={p}
+          spriteKey={spriteKeyRef.current}
           onWear={wearFromBag}
           onDrop={dropFromBag}
           onSpendStat={onSpendStat}
@@ -679,6 +694,7 @@ export default function App() {
       {overlay === "loot" && lootQueueRef.current[0] && (
         <LootPanel
           eq={lootQueueRef.current[0]}
+          curEquipped={p.equip[lootQueueRef.current[0].slot]}
           bagFull={p.bag.length >= 10}
           onTake={takeLoot}
           onSkip={skipLoot}

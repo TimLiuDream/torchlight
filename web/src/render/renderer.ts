@@ -1,31 +1,41 @@
 import type { CombatState, FloorMap, PlayerState } from "../game/types";
-import { sprite, hero24Frame } from "./sprites";
-import { frame, tex, TEX_SCALE } from "./atlas";
+import { hdImg, monsterHdKey } from "./hdAssets";
 import {
-  drawFloorTile, drawShadow, drawWallBlock, dungeonThemeName,
-  hash2, setDungeonTheme, TH, TW, themeAmbient, WALL_H, worldToScreen, type Cam,
+  currentTheme, drawFloorTile, drawShadow, drawWallBlock,
+  dungeonCombatBgKey, dungeonThemeName, hash2, setDungeonTheme,
+  TH, TW, themeAmbient, worldToScreen, type Cam,
 } from "./iso";
 import { drawLighting, drawVignette, type Light } from "./lighting";
 import * as fx from "./particles";
 
-// 画布逻辑分辨率自适应: W/H 在渲染入口从 ctx.canvas 读取(桌面 800x450, 移动端跟随容器)
-let mainCanvas: HTMLCanvasElement | null = null;
+export type LogicalCanvas = HTMLCanvasElement & { __logicalW?: number; __logicalH?: number };
 
-/** 最近一帧渲染的画布尺寸(供外部按同一坐标系发射演出) */
-export function gameCanvasSize(): { w: number; h: number } {
-  return { w: mainCanvas?.width ?? 800, h: mainCanvas?.height ?? 450 };
+let mainCanvas: LogicalCanvas | null = null;
+
+function canvasLogicalSize(cv: LogicalCanvas | null): { w: number; h: number } {
+  if (!cv) return { w: 880, h: 495 };
+  return {
+    w: cv.__logicalW ?? cv.width ?? 880,
+    h: cv.__logicalH ?? cv.height ?? 495,
+  };
 }
 
-// ---------------- 相机与演出状态(模块级) ----------------
+/** 最近一帧渲染的逻辑画布尺寸(供外部按同一坐标系发射特效) */
+export function gameCanvasSize(): { w: number; h: number } {
+  return canvasLogicalSize(mainCanvas);
+}
+
+// ---------------- 相机与演出状态 ----------------
 const cam: Cam = { x: 0, y: 0, shake: 0, shakeT: 0 };
 let camInit = false;
-let lungeT = 0; // 玩家前冲动画 0~1
-let hitStop = 0; // 顿帧剩余秒
-let facing = 1; // 1 右 / -1 左
-let bobT = 0; // 走路弹跳相位
-// 渲染插值: 逻辑格子即时更新, 画面坐标平滑追赶 => 连续移动观感
-let prx = 0, pry = 0, prInit = false; // 玩家
-const monIp = new Map<number, { x: number; y: number }>(); // 怪物(id -> 渲染格坐标)
+let lungeT = 0;
+let hitStop = 0;
+let facing = 1; // 1 朝右 / -1 朝左
+let bobT = 0;
+
+let prx = 0, pry = 0, prInit = false;
+const monIp = new Map<number, { x: number; y: number; dir: number }>();
+const combatTrailHp = new Map<number, number>(); // 怪物血条延迟白条
 
 export function shakeCam(strength = 6): void {
   cam.shake = Math.max(cam.shake, strength);
@@ -42,6 +52,7 @@ export function hitStopFx(sec = 0.06): void {
 export function clearSceneFx(): void {
   fx.clearFx();
   cam.shake = 0;
+  camInit = false;
   lungeT = 0;
   hitStop = 0;
   bobT = 0;
@@ -49,129 +60,29 @@ export function clearSceneFx(): void {
   monIp.clear();
   prInit = false;
   combatAlive.clear();
+  combatTrailHp.clear();
 }
 
-/** 记录移动朝向并触发走路弹跳 */
 export function faceDir(dx: number): void {
   if (dx !== 0) facing = dx > 0 ? 1 : -1;
   bobT = 1;
 }
 
-/** 切楼层时同步地牢主题(由 App 调用) */
 export { setDungeonTheme, dungeonThemeName };
 
 // ---------------- 进层转场 ----------------
 interface FloorTransition { t: number; dur: number; floor: number; theme: string; }
 let trans: FloorTransition | null = null;
 export function startFloorTransition(floor: number, theme: string): void {
-  trans = { t: 0, dur: 1.4, floor, theme };
+  trans = { t: 0, dur: 1.45, floor, theme };
 }
 
-// ---------------- 0x72 精灵映射 ----------------
-// 职业(spriteKey 来自 game/data) -> 动画基名 + 手持武器
-const HERO_ANIM: Record<string, { idle: string; run: string; hit: string; weapon: string }> = {
-  hero_mage: { idle: "wizzard_m_idle", run: "wizzard_m_run", hit: "wizzard_m_hit", weapon: "weapon_red_magic_staff" },
-  hero_berserker: { idle: "knight_m_idle", run: "knight_m_run", hit: "knight_m_hit", weapon: "weapon_knight_sword" },
-  hero_engineer: { idle: "elf_m_idle", run: "elf_m_run", hit: "elf_m_hit", weapon: "weapon_big_hammer" },
-};
-// 怪物 body(来自 game/data) -> 动画基名(idle / run 可选)
-const MON_ANIM: Record<string, { idle: string; run?: string }> = {
-  goblin: { idle: "goblin_idle", run: "goblin_run" },
-  slime: { idle: "muddy_idle", run: "muddy_run" },
-  skeleton: { idle: "skelet_idle", run: "skelet_run" },
-  spider: { idle: "wogol_idle", run: "wogol_run" },
-  brute: { idle: "masked_orc_idle", run: "masked_orc_run" },
-  ghost: { idle: "swampy_idle", run: "swampy_run" },
-  golem: { idle: "big_zombie_idle" },
-  hound: { idle: "imp_idle", run: "imp_run" },
-  mimic: { idle: "tiny_zombie_idle", run: "tiny_zombie_run" },
-  boss: { idle: "big_demon_idle", run: "big_demon_run" },
-};
-
-// 描边剪影缓存: 帧 4 方向偏移的黑剪影, 让角色在暗背景轮廓立起来
-const outlineCache = new Map<string, HTMLCanvasElement>();
-function outlined(img: HTMLImageElement | HTMLCanvasElement, key: string): HTMLCanvasElement {
-  let cv = outlineCache.get(key);
-  if (!cv) {
-    cv = document.createElement("canvas");
-    cv.width = img.width + 2;
-    cv.height = img.height + 2;
-    const c = cv.getContext("2d")!;
-    c.filter = "brightness(0)";
-    for (const [ox, oy] of [[0, 1], [2, 1], [1, 0], [1, 2]] as const) {
-      c.drawImage(img, ox, oy);
-    }
-    outlineCache.set(key, cv);
-  }
-  return cv;
-}
-
-/** 画一个 0x72 动画帧(带描边), 脚底中心对齐 (sx, sy+6), 帧尺寸自动放大。返回是否成功。 */
-function blitActor(
-  ctx: CanvasRenderingContext2D, base: string, animPhase: number, moving: boolean,
-  sx: number, sy: number, scale: number, facingDir = 1,
-): boolean {
-  const def = moving ? (MON_ANIM[base]?.run ?? MON_ANIM[base]?.idle ?? base) : (MON_ANIM[base]?.idle ?? base);
-  const img = frame(def, animPhase) ?? tex(def);
-  if (!img) return false;
-  const w = img.width * TEX_SCALE * scale;
-  const h = img.height * TEX_SCALE * scale;
-  const out = outlined(img, def);
-  const ow = out.width * TEX_SCALE * scale;
-  const oh = out.height * TEX_SCALE * scale;
-  ctx.save();
-  ctx.translate(Math.round(sx), Math.round(sy + 6));
-  ctx.scale(facingDir, 1);
-  ctx.drawImage(out, Math.round(-ow / 2), Math.round(-oh), Math.round(ow), Math.round(oh));
-  ctx.drawImage(img, Math.round(-w / 2), Math.round(-h), Math.round(w), Math.round(h));
-  ctx.restore();
-  return true;
-}
-
-/** 手持武器(0x72 weapon 帧): 柄底为轴, swing 1=高举 0=落下。scale 为精灵放大倍率。 */
-function drawWeapon(ctx: CanvasRenderingContext2D, key: string, sx: number, sy: number, swing: number, facing: number, scale: number): void {
-  const img = tex(key);
-  if (!img) return;
-  const w = img.width * scale * 0.5;
-  const h = img.height * scale * 0.5;
-  const k = scale / TEX_SCALE;
-  const hx = sx + facing * 10 * k;
-  const hy = sy - 17 * k;
-  const angle = (-100 + (1 - swing) * 150) * (Math.PI / 180); // 高举 -100° → 扛着 50°
-  ctx.save();
-  ctx.translate(hx, hy);
-  ctx.scale(facing, 1);
-  ctx.rotate(angle * facing);
-  ctx.drawImage(img, -w / 2, -h, w, h);
-  ctx.restore();
-}
-
-/** 画主角 24x24 建模(带描边), 脚底中心对齐 (sx, sy+6) */
-function blitHero24(
-  ctx: CanvasRenderingContext2D, heroKey: string, phase: number,
-  sx: number, sy: number, scale: number, facingDir = 1,
-): void {
-  const img = hero24Frame(heroKey, phase);
-  const out = outlined(img, `hero24:${heroKey}`);
-  const w = img.width * TEX_SCALE * scale;
-  const h = img.height * TEX_SCALE * scale;
-  const ow = out.width * TEX_SCALE * scale;
-  const oh = out.height * TEX_SCALE * scale;
-  ctx.save();
-  ctx.translate(Math.round(sx), Math.round(sy + 6));
-  ctx.scale(facingDir, 1);
-  ctx.drawImage(out, Math.round(-ow / 2), Math.round(-oh), Math.round(ow), Math.round(oh));
-  ctx.drawImage(img, Math.round(-w / 2), Math.round(-h), Math.round(w), Math.round(h));
-  ctx.restore();
-}
-
-/** 世界格子坐标 -> 当前相机下的画布坐标(供外部在正确位置发射粒子) */
+/** 世界格子中心 -> 当前相机下的逻辑画布坐标 */
 export function worldToScreenCam(gx: number, gy: number): [number, number] {
   const [wx, wy] = worldToScreen(gx, gy);
-  return [wx + cam.x, wy + cam.y];
+  return [wx + TW * 0.5 + cam.x, wy + TH * 0.55 + cam.y];
 }
 
-// 地牢世界飘字(如捡金币)
 interface WorldFloat {
   x: number;
   y: number;
@@ -181,20 +92,108 @@ interface WorldFloat {
 }
 const worldFloats: WorldFloat[] = [];
 export function addWorldFloat(gx: number, gy: number, text: string, color: string): void {
-  worldFloats.push({ x: gx, y: gy, text, color, t: 1.2 });
+  worldFloats.push({ x: gx, y: gy, text, color, t: 1.25 });
 }
 
-// ---------------- 正交地牢 ----------------
-export function renderDungeon(ctx: CanvasRenderingContext2D, map: FloorMap, _player: PlayerState, playerSprite: string, dt: number): void {
-  const W = ctx.canvas.width;
-  const H = ctx.canvas.height;
-  mainCanvas = ctx.canvas;
-  if (hitStop > 0) {
-    hitStop -= dt;
-    dt *= 0.12; // 顿帧: 时间变慢
+/** 在指定脚底锚点 (cx, footY) 绘制高清立绘角色/怪物, 支持呼吸形变、步伐摆动与受击闪白 */
+function drawIllustratedActor(
+  ctx: CanvasRenderingContext2D,
+  key: string,
+  cx: number,
+  footY: number,
+  targetH: number,
+  flipX: number, // 1 保持原图朝向, -1 水平镜像
+  opts: {
+    breathPhase?: number;
+    moving?: boolean;
+    leanRad?: number;
+    hurtFlash?: number;
+    dimmed?: boolean;
+    fallbackColor?: string;
+  } = {},
+): { w: number; h: number } {
+  const img = hdImg(key);
+  const bp = opts.breathPhase ?? 0;
+  const breath = Math.sin(bp) * 0.022;
+  const stride = opts.moving ? Math.sin(bp * 3.2) * 0.06 : 0;
+  const hop = opts.moving ? Math.abs(Math.sin(bp * 3.2)) * (targetH * 0.07) : 0;
+
+  if (!img) {
+    // 资源加载极短瞬间的矢量剪影兜底
+    const w = targetH * 0.62;
+    ctx.save();
+    ctx.translate(cx, footY - hop);
+    ctx.fillStyle = opts.fallbackColor ?? "#6d5dfc";
+    ctx.beginPath();
+    ctx.ellipse(0, -targetH * 0.48, w * 0.42, targetH * 0.46, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return { w, h: targetH };
   }
 
-  // 玩家渲染插值(传层瞬移直接吸附)
+  const aspect = img.naturalWidth / Math.max(1, img.naturalHeight);
+  const h = targetH;
+  const w = h * aspect;
+
+  ctx.save();
+  ctx.translate(cx, footY - hop);
+  ctx.scale(flipX * (1 - breath * 0.6), 1 + breath);
+  if (opts.leanRad || stride) {
+    ctx.rotate((opts.leanRad ?? 0) + stride);
+  }
+  if (opts.hurtFlash && opts.hurtFlash > 0) {
+    ctx.filter = "brightness(2.5) contrast(1.15) saturate(0.35)";
+  } else if (opts.dimmed) {
+    ctx.filter = "brightness(0.45)";
+  }
+  ctx.drawImage(img, -w * 0.5, -h, w, h);
+  ctx.restore();
+
+  return { w, h };
+}
+
+/** 精英/首领脚下旋转奥术/炼狱法阵 */
+function drawAuraCircle(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, color: string, time: number): void {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(1, 0.46);
+  ctx.rotate(time * 0.9);
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.55;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.setLineDash([6, 6]);
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.74, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+// ================================================================
+// 1. 地牢探索渲染
+// ================================================================
+export function renderDungeon(
+  ctx: CanvasRenderingContext2D,
+  map: FloorMap,
+  _player: PlayerState,
+  playerSprite: string,
+  dt: number,
+): void {
+  const cv = ctx.canvas as LogicalCanvas;
+  mainCanvas = cv;
+  const { w: W, h: H } = canvasLogicalSize(cv);
+
+  if (hitStop > 0) {
+    hitStop -= dt;
+    dt *= 0.12;
+  }
+
+  // 玩家平滑追赶插值
   if (!prInit || Math.abs(map.playerX - prx) + Math.abs(map.playerY - pry) > 3) {
     prx = map.playerX;
     pry = map.playerY;
@@ -203,17 +202,17 @@ export function renderDungeon(ctx: CanvasRenderingContext2D, map: FloorMap, _pla
   prx += (map.playerX - prx) * Math.min(1, dt * 13);
   pry += (map.playerY - pry) * Math.min(1, dt * 13);
 
-  // 相机跟随(平滑, 追玩家渲染位置)
+  // 相机对准玩家所在格中心
   const [psx, psy] = worldToScreen(prx, pry);
-  const targetX = W / 2 - psx - TW / 2;
-  const targetY = H / 2 - psy - TH / 2;
+  const targetX = W * 0.5 - (psx + TW * 0.5);
+  const targetY = H * 0.5 - (psy + TH * 0.5);
   if (!camInit) {
     cam.x = targetX;
     cam.y = targetY;
     camInit = true;
   }
-  cam.x += (targetX - cam.x) * Math.min(1, dt * 6);
-  cam.y += (targetY - cam.y) * Math.min(1, dt * 6);
+  cam.x += (targetX - cam.x) * Math.min(1, dt * 6.5);
+  cam.y += (targetY - cam.y) * Math.min(1, dt * 6.5);
   cam.shakeT += dt;
   cam.shake = Math.max(0, cam.shake - dt * 22);
   const shakeX = cam.shake > 0 ? Math.sin(cam.shakeT * 70) * cam.shake : 0;
@@ -226,274 +225,267 @@ export function renderDungeon(ctx: CanvasRenderingContext2D, map: FloorMap, _pla
     return [wx + ox, wy + oy];
   };
 
-  ctx.imageSmoothingEnabled = false;
-  ctx.fillStyle = "#07060d";
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  const theme = currentTheme();
+
+  ctx.fillStyle = theme.roofFill;
   ctx.fillRect(0, 0, W, H);
 
-  // 可视范围裁剪(只画屏内附近)
   const inView = (gx: number, gy: number): boolean => {
     const [sx, sy] = S(gx, gy);
     return sx > -TW * 2 && sx < W + TW * 2 && sy > -TH * 2 && sy < H + TH * 2;
   };
-  const tileAt = (x: number, y: number): string =>
+  const kindAt = (x: number, y: number): string =>
     x >= 0 && y >= 0 && x < map.cols && y < map.rows ? map.tiles[y * map.cols + x] : "void";
+  const isWalkableAt = (x: number, y: number): boolean => {
+    const k = kindAt(x, y);
+    return k !== "wall" && k !== "void";
+  };
 
-  // 第一轮: 地板 + 楼梯/传送门涂装
+  const nowSec = performance.now() / 1000;
+
+  // 第一遍: 地面石板 + 墙根环境光遮蔽阴影 + 楼梯/传送门地面结构
   for (let y = 0; y < map.rows; y++) {
     for (let x = 0; x < map.cols; x++) {
       const i = y * map.cols + x;
       const t = map.tiles[i];
-      if (!map.seen[i] || t === "wall") continue;
-      if (!inView(x, y)) continue;
+      if (!map.seen[i] || t === "wall" || !inView(x, y)) continue;
       const [sx, sy] = S(x, y);
       drawFloorTile(ctx, x, y, sx, sy);
-      // 墙脚投影: 上格是墙的地板画顶部渐变阴影, 提升墙体体量感
-      if (tileAt(x, y - 1) === "wall") {
-        const g = ctx.createLinearGradient(0, sy, 0, sy + 18);
-        g.addColorStop(0, "rgba(0,0,0,0.4)");
+
+      // 邻墙环境光遮蔽阴影 (Ambient Occlusion)
+      if (kindAt(x, y - 1) === "wall") {
+        const g = ctx.createLinearGradient(0, sy, 0, sy + 20);
+        g.addColorStop(0, "rgba(0,0,0,0.52)");
         g.addColorStop(1, "rgba(0,0,0,0)");
         ctx.fillStyle = g;
-        ctx.fillRect(sx, sy, TW, 18);
+        ctx.fillRect(sx, sy, TW, 20);
       }
+      if (kindAt(x - 1, y) === "wall") {
+        const g = ctx.createLinearGradient(sx, 0, sx + 10, 0);
+        g.addColorStop(0, "rgba(0,0,0,0.34)");
+        g.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(sx, sy, 10, TH);
+      }
+      if (kindAt(x + 1, y) === "wall") {
+        const g = ctx.createLinearGradient(sx + TW, 0, sx + TW - 10, 0);
+        g.addColorStop(0, "rgba(0,0,0,0.34)");
+        g.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(sx + TW - 10, sy, 10, TH);
+      }
+
+      if (t === "stairs") drawStairsDecal(ctx, sx, sy, nowSec);
+      else if (t === "portal") drawPortalDecal(ctx, sx, sy, nowSec);
+
+      // 探索过但不在当前视野: 战争迷雾压暗
       if (!map.visible[i]) {
-        ctx.fillStyle = "rgba(6,5,14,0.5)";
+        ctx.fillStyle = theme.fogTint;
         ctx.fillRect(sx, sy, TW, TH);
       }
-      if (t === "stairs") drawStairsDecal(ctx, sx, sy);
-      else if (t === "portal") drawPortalDecal(ctx, sx, sy);
     }
   }
 
-  // 第二轮: 墙与实体统一进列表按 y 排序(正交俯视遮挡: 近处覆盖远处)
-  interface Draw {
+  // 第二遍: 墙体、立面装饰、场景交互物、怪物与主角统一按 Y 深度排序遮挡
+  interface DrawCmd {
     depth: number;
     fn: () => void;
   }
-  const list: Draw[] = [];
+  const list: DrawCmd[] = [];
   const torchLights: Light[] = [];
-  const nowSec = performance.now() / 1000;
+
   for (let y = 0; y < map.rows; y++) {
     for (let x = 0; x < map.cols; x++) {
       const i = y * map.cols + x;
-      if (!map.seen[i]) continue;
-      if (map.tiles[i] !== "wall" || !inView(x, y)) continue;
+      if (!map.seen[i] || map.tiles[i] !== "wall" || !inView(x, y)) continue;
       const [sx, sy] = S(x, y);
       const vis = map.visible[i];
-      const isFace = tileAt(x, y + 1) !== "wall" && tileAt(x, y + 1) !== "void";
+      const nb = {
+        nFloor: isWalkableAt(x, y - 1),
+        sFloor: isWalkableAt(x, y + 1),
+        wFloor: isWalkableAt(x - 1, y),
+        eFloor: isWalkableAt(x + 1, y),
+      };
       list.push({
-        depth: y + 0.4,
-        fn: () => drawWallBlock(ctx, x, y, sx, sy, vis, isFace),
+        depth: y + 0.35,
+        fn: () => drawWallBlock(ctx, x, y, sx, sy, vis, nb),
       });
-      // 立面装饰(hash 分段: 火把 0~0.2 / 旗子 0.2~0.3 / 石柱 0.3~0.36)
-      if (vis && isFace) {
+
+      if (vis && nb.sFloor) {
         const n = hash2(x * 13 + 7, y * 17 + 3);
-        const cx = sx + TW / 2;
+        const cx = sx + TW * 0.5;
         if (n < 0.2) {
-          torchLights.push({ x: cx, y: sy + WALL_H + 6, radius: 110, flicker: true, warm: "255,150,60" });
-          list.push({ depth: y + 0.45, fn: () => drawWallTorch(ctx, cx, sy + WALL_H, nowSec + x) });
-        } else if (n < 0.3) {
-          const img = tex(n < 0.25 ? "wall_banner_red" : "wall_banner_blue");
-          if (img) list.push({ depth: y + 0.45, fn: () => ctx.drawImage(img, cx - 12, sy + 8, 24, 24) });
+          torchLights.push({ x: cx, y: sy + 24, radius: 132, flicker: true, warm: "255,155,65" });
+          list.push({ depth: y + 0.42, fn: () => drawWallTorch(ctx, cx, sy + 18, nowSec + x * 0.7) });
+        } else if (n < 0.29) {
+          const crimson = n < 0.245;
+          list.push({ depth: y + 0.42, fn: () => drawWallBanner(ctx, cx, sy + 14, crimson) });
         } else if (n < 0.36) {
-          const img = tex("wall_column_mid");
-          if (img) list.push({ depth: y + 0.45, fn: () => ctx.drawImage(img, cx - 16, sy + 4, 32, 32) });
+          list.push({ depth: y + 0.42, fn: () => drawWallPilaster(ctx, cx, sy + 11) });
         }
       }
     }
   }
 
-  // 第三轮: 道具/怪物/玩家 追加进同一列表(墙后怪会被前方墙格正确遮挡)
-  // 特殊 tile 道具
-  const decorImg = (t: string): [string, number] | null => {
-    if (t === "chest") return ["chest_empty_open_anim_f0", 1];
-    if (t === "merchant") return ["necromancer_idle_anim_f0", 1];
-    return null;
-  };
+  // 特殊交互地形道具 (全部严格居中在格子中央!)
   for (let y = 0; y < map.rows; y++) {
     for (let x = 0; x < map.cols; x++) {
       const i = y * map.cols + x;
       const t = map.tiles[i];
       if (t === "wall" || !map.seen[i] || !inView(x, y)) continue;
       const [sx, sy] = S(x, y);
+      const cx = sx + TW * 0.5;
+      const cy = sy + TH * 0.56;
+      const vis = map.visible[i];
+
       if (t === "campfire") {
-        list.push({
-          depth: y + 0.12,
-          fn: () => {
-            // 营地石圈(篝火底座)
-            ctx.strokeStyle = "rgba(150,150,170,0.35)";
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.ellipse(sx + TW / 2, sy + TH / 2 + 4, 20, 12, 0, 0, Math.PI * 2);
-            ctx.stroke();
-            drawShadow(ctx, sx, sy, 30);
-            ctx.drawImage(sprite("campfireProp"), Math.round(sx - 21), Math.round(sy - 22), 42, 42);
-          },
-        });
-        continue;
-      }
-      if (t === "spring") {
-        list.push({
-          depth: y + 0.15,
-          fn: () => {
-            // 0x72 红色喷泉(水流动画) + 石台描边
-            const basin = tex("wall_fountain_basin_red");
-            if (basin) ctx.drawImage(basin, sx, sy, TW, TH);
-            const mid = frame("wall_fountain_mid_red", Math.floor(performance.now() / 300));
-            if (mid) ctx.drawImage(mid, sx, sy - 6, TW, TH);
-          },
-        });
-        continue;
-      }
-      if (t === "merchant") {
-        list.push({
-          depth: y + 0.1,
-          fn: () => {
-            // 商人红毯
-            ctx.fillStyle = "rgba(130,40,44,0.75)";
-            ctx.fillRect(sx + 4, sy + 2, TW - 8, TH - 6);
-            ctx.strokeStyle = "rgba(220,180,90,0.5)";
-            ctx.lineWidth = 2;
-            ctx.strokeRect(sx + 8, sy + 6, TW - 16, TH - 14);
-          },
-        });
-      }
-      const d = decorImg(t);
-      if (d) {
-        const [key] = d;
-        list.push({
-          depth: y + 0.2,
-          fn: () => {
-            const img = tex(key);
-            if (!img) return;
-            drawShadow(ctx, sx, sy, 34);
-            ctx.save();
-            if (!map.visible[i]) ctx.filter = "brightness(0.45)";
-            ctx.drawImage(img, sx - img.width * TEX_SCALE / 2, sy + 6 - img.height * TEX_SCALE, img.width * TEX_SCALE, img.height * TEX_SCALE);
-            ctx.restore();
-          },
-        });
+        list.push({ depth: y + 0.48, fn: () => drawCampfireProp(ctx, cx, cy, nowSec, vis) });
+      } else if (t === "spring") {
+        list.push({ depth: y + 0.48, fn: () => drawSpringProp(ctx, cx, cy, nowSec, vis) });
+      } else if (t === "chest") {
+        list.push({ depth: y + 0.5, fn: () => drawChestProp(ctx, cx, cy + 4, nowSec, vis) });
+      } else if (t === "merchant") {
+        list.push({ depth: y + 0.52, fn: () => drawMerchantProp(ctx, sx, sy, cx, cy + 6, nowSec, vis) });
       }
     }
   }
-  // 怪物(渲染位置插值 + idle/run 动画)
+
+  // 怪物 (站在格子中央脚底锚点)
   for (const m of map.monsters) {
     if (m.hp <= 0) continue;
     const i = m.y * map.cols + m.x;
     if (!map.visible[i] || !inView(m.x, m.y)) continue;
     let ip = monIp.get(m.id);
-    if (!ip || Math.abs(m.x - ip.x) + Math.abs(m.y - ip.y) > 3) { ip = { x: m.x, y: m.y }; monIp.set(m.id, ip); }
-    const dx = m.x - ip.x, dy = m.y - ip.y;
+    if (!ip || Math.abs(m.x - ip.x) + Math.abs(m.y - ip.y) > 3) {
+      ip = { x: m.x, y: m.y, dir: -1 };
+      monIp.set(m.id, ip);
+    }
+    const dx = m.x - ip.x;
+    const dy = m.y - ip.y;
+    if (Math.abs(dx) > 0.02) ip.dir = dx > 0 ? 1 : -1;
     ip.x += dx * Math.min(1, dt * 11);
     ip.y += dy * Math.min(1, dt * 11);
+
     const [sx, sy] = S(ip.x, ip.y);
-    const scale = m.boss ? 1.3 : m.elite ? 1.15 : 1;
-    const moving = Math.abs(dx) + Math.abs(dy) > 0.05;
-    const animPhase = Math.floor(performance.now() / 160 + m.id * 1.3);
+    const cx = sx + TW * 0.5;
+    const footY = sy + TH * 0.8;
+    const moving = Math.abs(dx) + Math.abs(dy) > 0.04;
+    const targetH = m.boss ? 84 : m.elite ? 66 : 54;
+    // 怪物立绘默认朝左(-1), 若向右移动(dir=1)则水平翻转(-1)
+    const flipX = ip.dir > 0 ? -1 : 1;
+
     if (m.elite || m.boss) {
-      fx.orbitTick(sx, sy - 10, 26, m.id, dt, m.boss ? "#ff9b6b" : "#c9a0ff");
+      fx.orbitTick(cx, footY - 8, 24, m.id, dt, m.boss ? "#ff7849" : "#c084fc");
     }
+
     list.push({
-      depth: m.y + 0.5,
+      depth: ip.y + 0.62,
       fn: () => {
         if (m.elite || m.boss) {
-          ctx.save();
-          ctx.globalAlpha = 0.3;
-          ctx.fillStyle = m.boss ? "#ff4b4b" : "#b464ff";
-          ctx.beginPath();
-          ctx.ellipse(sx, sy + 4, 24, 10, 0, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.restore();
+          drawAuraCircle(ctx, cx, footY - 2, m.boss ? 28 : 22, m.boss ? "#ff5238" : "#b36bff", nowSec);
         }
-        drawShadow(ctx, sx, sy, 26 * scale);
+        drawShadow(ctx, cx, footY, targetH * 0.58);
+        drawIllustratedActor(ctx, monsterHdKey(m.body), cx, footY, targetH, flipX, {
+          breathPhase: nowSec * 3.4 + m.id * 1.7,
+          moving,
+          fallbackColor: m.boss ? "#ef4444" : "#a855f7",
+        });
         if (m.hp < m.maxHp) {
-          const bw = 40;
-          const by = sy - 52 * scale;
-          ctx.fillStyle = "#0d0b16";
-          ctx.fillRect(sx - bw / 2, by, bw, 4);
-          ctx.fillStyle = m.boss ? "#ff4b4b" : "#4ade80";
-          ctx.fillRect(sx - bw / 2, by, Math.max(1, (bw * m.hp) / m.maxHp), 4);
-        }
-        if (!blitActor(ctx, m.body, animPhase, moving, sx, sy, scale * 1.35, 1)) {
-          // 贴图未就绪时回退程序化精灵
-          ctx.drawImage(sprite(m.body), Math.round(sx - 18), Math.round(sy - 42), 36, 36);
+          drawMiniBar(ctx, cx - 22, footY - targetH - 8, 44, 5, m.hp / m.maxHp, m.boss ? "#ff5238" : "#4ade80");
         }
       },
     });
   }
-  // 玩家(前冲 + 朝向翻转 + 走路弹跳 + 待机呼吸)
-  {
-    const lunge = Math.sin(lungeT * Math.PI) * 10 * facing;
-    const hop = Math.sin(bobT * Math.PI) * 4;
-    const [sx, sy] = S(prx, pry);
-    const anim = HERO_ANIM[playerSprite] ?? HERO_ANIM.hero_mage;
-    list.push({
-      depth: map.playerY + 0.6,
-      fn: () => {
-        drawShadow(ctx, sx, sy, 36);
-        // 主角 24x24 精细建模(呼吸双帧)
-        blitHero24(ctx, playerSprite, Math.floor(performance.now() / 480), sx + lunge, sy - hop, 1.1, facing);
-        drawWeapon(ctx, anim.weapon, sx + lunge, sy - hop, lungeT, facing, TEX_SCALE * 1.35);
-        // 选中圈
-        ctx.strokeStyle = "rgba(255,230,150,0.5)";
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.ellipse(sx, sy + 4, 18, 8, 0, 0, Math.PI * 2);
-        ctx.stroke();
-      },
-    });
-  }
-  list.sort((a, b) => a.depth - b.depth);
-  for (const d of list) d.fn();
 
-  // 粒子 tick(篝火/传送门/环境尘埃/火把火星)
+  // 主角 (站在格子中央脚底锚点)
+  {
+    const playerMoving = Math.abs(map.playerX - prx) + Math.abs(map.playerY - pry) > 0.03 || bobT > 0.15;
+    const lunge = Math.sin(lungeT * Math.PI) * 12 * facing;
+    const [sx, sy] = S(prx, pry);
+    const cx = sx + TW * 0.5 + lunge;
+    const footY = sy + TH * 0.82;
+    const heroH = 64;
+
+    list.push({
+      depth: pry + 0.68,
+      fn: () => {
+        // 主角脚下暖金光环指引圈
+        ctx.save();
+        ctx.strokeStyle = "rgba(245, 202, 92, 0.45)";
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.ellipse(cx - lunge, footY - 1, 18, 8, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+
+        drawShadow(ctx, cx, footY, 38);
+        drawIllustratedActor(ctx, playerSprite, cx, footY, heroH, facing, {
+          breathPhase: nowSec * 3.1,
+          moving: playerMoving,
+          leanRad: lungeT > 0.05 ? 0.14 * facing : 0,
+          fallbackColor: "#eab308",
+        });
+      },
+    });
+  }
+
+  list.sort((a, b) => a.depth - b.depth);
+  for (const cmd of list) cmd.fn();
+
+  // 常驻环境粒子
   for (let y = 0; y < map.rows; y++) {
     for (let x = 0; x < map.cols; x++) {
       const i = y * map.cols + x;
-      if (!map.visible[i]) continue;
+      if (!map.visible[i] || !inView(x, y)) continue;
       const t = map.tiles[i];
       const [sx, sy] = S(x, y);
-      if (t === "campfire") fx.campfireTick(sx, sy - 12, dt);
-      else if (t === "portal") fx.portalTick(sx, sy, dt);
+      const cx = sx + TW * 0.5;
+      const cy = sy + TH * 0.5;
+      if (t === "campfire") fx.campfireTick(cx, cy - 6, dt);
+      else if (t === "portal") fx.portalTick(cx, cy, dt);
     }
   }
-  // 悬浮尘埃: 可见区内低概率漂起, 经光照才显形
-  if (Math.random() < dt * 5) {
-    fx.dust(cam.x + Math.random() * W, cam.y + Math.random() * H);
+  if (Math.random() < dt * 6) {
+    fx.dust(Math.random() * W, Math.random() * H, theme.accentGlow);
   }
-  // 火把火星
   for (const tl of torchLights) {
-    if (Math.random() < dt * 3) {
-      fx.campfireTick(tl.x, tl.y - 4, dt * 0.4);
+    if (Math.random() < dt * 3.2) {
+      fx.campfireTick(tl.x, tl.y - 4, dt * 0.45);
     }
   }
   fx.updateFx(dt);
   fx.drawFx(ctx);
 
-  // 光照(玩家双层光: 大晕 + 亮核, 火把 + 特殊地形)
+  // 动态柔和光照 (全部对齐格子中心!)
+  const pCenterX = psx + ox + TW * 0.5;
+  const pCenterY = psy + oy + TH * 0.45;
   const lights: Light[] = [
-    { x: psx + ox + TW / 2, y: psy + oy + TH / 2 - 14, radius: 250, intensity: 0.8, warm: "255,205,160" },
-    { x: psx + ox + TW / 2, y: psy + oy + TH / 2 - 18, radius: 96, intensity: 1, warm: "255,224,190" },
+    { x: pCenterX, y: pCenterY, radius: 275, intensity: 0.86, warm: "255,205,155" },
+    { x: pCenterX, y: pCenterY - 4, radius: 110, intensity: 1, warm: "255,228,192" },
     ...torchLights,
   ];
   for (let y = 0; y < map.rows; y++) {
     for (let x = 0; x < map.cols; x++) {
       const i = y * map.cols + x;
-      if (!map.visible[i]) continue;
+      if (!map.visible[i] || !inView(x, y)) continue;
       const t = map.tiles[i];
       const [sx, sy] = S(x, y);
-      if (t === "campfire") lights.push({ x: sx + TW / 2, y: sy, radius: 140, flicker: true, warm: "255,150,60" });
-      else if (t === "portal") lights.push({ x: sx + TW / 2, y: sy + TH / 2, radius: 100, flicker: true, warm: "140,90,255" });
-      else if (t === "spring") lights.push({ x: sx + TW / 2, y: sy + TH / 2, radius: 70, warm: "90,160,255" });
-      else if (t === "stairs") lights.push({ x: sx + TW / 2, y: sy + TH / 2, radius: 80, warm: "255,215,120" });
-      else if (t === "chest") lights.push({ x: sx + TW / 2, y: sy, radius: 55, flicker: true, warm: "255,205,90" });
-      else if (t === "merchant") lights.push({ x: sx + TW / 2, y: sy, radius: 90, warm: "255,180,120" });
+      const cx = sx + TW * 0.5;
+      const cy = sy + TH * 0.5;
+      if (t === "campfire") lights.push({ x: cx, y: cy - 4, radius: 165, flicker: true, warm: "255,148,58" });
+      else if (t === "portal") lights.push({ x: cx, y: cy, radius: 120, flicker: true, warm: "168,105,255" });
+      else if (t === "spring") lights.push({ x: cx, y: cy, radius: 95, warm: "72,202,255" });
+      else if (t === "stairs") lights.push({ x: cx, y: cy, radius: 92, warm: "255,210,115" });
+      else if (t === "chest") lights.push({ x: cx, y: cy, radius: 68, flicker: true, warm: "255,208,96" });
+      else if (t === "merchant") lights.push({ x: cx, y: cy - 4, radius: 110, warm: "255,186,120" });
     }
   }
-  drawLighting(ctx, W, H, lights, cam.shakeT + performance.now() / 1000, themeAmbient());
+  drawLighting(ctx, W, H, lights, nowSec, themeAmbient());
   drawVignette(ctx, W, H);
-  drawGradeAndScanlines(ctx, W, H);
 
-  // 进层转场: 黑幕 + 楼层大字
+  // 进层电影感黑幕转场
   if (trans) {
     trans.t += dt;
     const p = trans.t / trans.dur;
@@ -501,321 +493,680 @@ export function renderDungeon(ctx: CanvasRenderingContext2D, map: FloorMap, _pla
       trans = null;
     } else {
       let a: number;
-      if (p < 0.3) a = (p / 0.3) * 0.88;
-      else if (p < 0.62) a = 0.88;
-      else a = ((1 - (p - 0.62) / 0.38) ** 1.4) * 0.88;
-      ctx.fillStyle = `rgba(4,3,10,${a})`;
+      if (p < 0.28) a = (p / 0.28) * 0.9;
+      else if (p < 0.64) a = 0.9;
+      else a = ((1 - (p - 0.64) / 0.36) ** 1.4) * 0.9;
+      ctx.fillStyle = `rgba(5, 4, 11, ${a})`;
       ctx.fillRect(0, 0, W, H);
-      if (p > 0.22 && p < 0.82) {
-        const ta = Math.min(1, (0.82 - Math.abs(p - 0.52) * 5) * 1.8);
+      if (p > 0.2 && p < 0.84) {
+        const ta = Math.min(1, (0.84 - Math.abs(p - 0.52) * 4.8) * 1.8);
         ctx.save();
         ctx.globalAlpha = ta;
         ctx.textAlign = "center";
-        ctx.font = "bold 36px monospace";
-        ctx.strokeStyle = "#0d0b16";
+        // 装饰金线
+        ctx.strokeStyle = "rgba(212, 164, 76, 0.55)";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(W * 0.34, H * 0.5 + 4);
+        ctx.lineTo(W * 0.66, H * 0.5 + 4);
+        ctx.stroke();
+
+        ctx.font = '700 36px "Cinzel", "Noto Serif SC", Georgia, serif';
+        ctx.strokeStyle = "#08060e";
         ctx.lineWidth = 6;
-        ctx.strokeText(`第 ${trans.floor} 层`, W / 2, H / 2 - 8);
-        ctx.fillStyle = "#ffd23e";
-        ctx.fillText(`第 ${trans.floor} 层`, W / 2, H / 2 - 8);
-        ctx.font = "bold 15px monospace";
-        ctx.strokeText(`· ${trans.theme} ·`, W / 2, H / 2 + 22);
-        ctx.fillStyle = "#b0aac8";
-        ctx.fillText(`· ${trans.theme} ·`, W / 2, H / 2 + 22);
+        ctx.strokeText(`第 ${trans.floor} 层`, W * 0.5, H * 0.5 - 10);
+        ctx.fillStyle = "#f4cb69";
+        ctx.fillText(`第 ${trans.floor} 层`, W * 0.5, H * 0.5 - 10);
+
+        ctx.font = '600 15px "Noto Serif SC", "PingFang SC", sans-serif';
+        ctx.fillStyle = "#c4bed8";
+        ctx.fillText(`✦  ${trans.theme}  ✦`, W * 0.5, H * 0.5 + 28);
         ctx.textAlign = "left";
         ctx.restore();
       }
     }
   }
 
-  // 地牢飘字
+  // 世界飘字
   for (let i = worldFloats.length - 1; i >= 0; i--) {
     const f = worldFloats[i];
     f.t -= dt;
     if (f.t <= 0) { worldFloats.splice(i, 1); continue; }
     const [sx, sy] = S(f.x, f.y);
+    const cx = sx + TW * 0.5;
+    const fy = sy - 10 - (1.25 - f.t) * 28;
     ctx.save();
     ctx.globalAlpha = Math.min(1, f.t);
-    ctx.font = "bold 13px monospace";
-    ctx.strokeStyle = "#0d0b16";
-    ctx.lineWidth = 3;
-    const fy = sy - 30 - (1.2 - f.t) * 26;
-    ctx.strokeText(f.text, sx, fy);
+    ctx.textAlign = "center";
+    ctx.font = '700 15px "Cinzel", "Noto Serif SC", sans-serif';
+    ctx.strokeStyle = "#090712";
+    ctx.lineWidth = 4;
+    ctx.strokeText(f.text, cx, fy);
     ctx.fillStyle = f.color;
-    ctx.fillText(f.text, sx, fy);
+    ctx.fillText(f.text, cx, fy);
     ctx.restore();
   }
 
-  lungeT = Math.max(0, lungeT - dt * 4);
+  lungeT = Math.max(0, lungeT - dt * 4.2);
   bobT = Math.max(0, bobT - dt * 5);
 }
 
-/** 程序化墙面火把(0x72 v1.3 无火把帧): 木杆 + 摇曳火头 */
+// ---------------- 高清矢量手绘地牢物件 ----------------
 function drawWallTorch(ctx: CanvasRenderingContext2D, cx: number, ty: number, t: number): void {
   ctx.save();
-  // 木杆
-  ctx.fillStyle = "#5a3a1e";
-  ctx.fillRect(cx - 1, ty + 5, 3, 8);
-  // 火头(摇曳)
-  const sway = Math.sin(t * 6) * 1.2;
-  ctx.fillStyle = "#ff6b2e";
-  ctx.fillRect(cx - 2 + sway * 0.5, ty - 1, 5, 6);
-  ctx.fillStyle = "#ffa03e";
-  ctx.fillRect(cx - 1 + sway * 0.7, ty, 4, 4);
-  ctx.fillStyle = "#fff8d8";
-  ctx.fillRect(cx + sway, ty + 1, 2, 3);
+  // 铁艺托架
+  ctx.strokeStyle = "#1c1826";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(cx, ty + 14);
+  ctx.lineTo(cx, ty + 4);
+  ctx.stroke();
+  ctx.fillStyle = "#5d4632";
+  ctx.fillRect(cx - 2.5, ty + 3, 5, 10);
+  ctx.fillStyle = "#8c6d46";
+  ctx.fillRect(cx - 3.5, ty + 2, 7, 2.5);
+
+  // 摇曳火焰
+  const sway = Math.sin(t * 6.5) * 1.8;
+  ctx.beginPath();
+  ctx.moveTo(cx - 4.5, ty + 2);
+  ctx.quadraticCurveTo(cx - 5 + sway * 0.4, ty - 6, cx + sway, ty - 11);
+  ctx.quadraticCurveTo(cx + 5 + sway * 0.4, ty - 6, cx + 4.5, ty + 2);
+  ctx.closePath();
+  ctx.fillStyle = "#ff6b2b";
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(cx - 2.6, ty + 2);
+  ctx.quadraticCurveTo(cx + sway * 0.6, ty - 7, cx + 2.6, ty + 2);
+  ctx.fillStyle = "#ffd166";
+  ctx.fill();
   ctx.restore();
 }
 
-function drawStairsDecal(ctx: CanvasRenderingContext2D, sx: number, sy: number): void {
-  const img = tex("floor_ladder");
-  if (img) {
-    ctx.drawImage(img, sx, sy, TW, TH);
-  } else {
-    ctx.fillStyle = "#0d0b16";
-    ctx.fillRect(sx + 6, sy + 6, TW - 12, TH - 12);
-  }
-}
-
-function drawPortalDecal(ctx: CanvasRenderingContext2D, sx: number, sy: number): void {
-  const t = performance.now() / 1000;
-  const cx = sx + TW / 2;
-  const cy = sy + TH / 2;
+function drawWallBanner(ctx: CanvasRenderingContext2D, cx: number, ty: number, crimson: boolean): void {
   ctx.save();
-  const rings: Array<[string, number]> = [
-    ["rgba(74,47,146,0.85)", 20], ["rgba(138,92,240,0.8)", 13], ["rgba(200,176,255,0.75)", 7],
-  ];
-  for (const [color, r] of rings) {
-    ctx.fillStyle = color;
+  ctx.fillStyle = "#8a6d3b";
+  ctx.fillRect(cx - 10, ty, 20, 2.5);
+  ctx.beginPath();
+  ctx.moveTo(cx - 8, ty + 2.5);
+  ctx.lineTo(cx + 8, ty + 2.5);
+  ctx.lineTo(cx + 8, ty + 24);
+  ctx.lineTo(cx, ty + 19);
+  ctx.lineTo(cx - 8, ty + 24);
+  ctx.closePath();
+  ctx.fillStyle = crimson ? "#7c1d26" : "#23386b";
+  ctx.fill();
+  ctx.strokeStyle = "#d4a44c";
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawWallPilaster(ctx: CanvasRenderingContext2D, cx: number, ty: number): void {
+  ctx.save();
+  const g = ctx.createLinearGradient(cx - 8, 0, cx + 8, 0);
+  g.addColorStop(0, "#1d1a2b");
+  g.addColorStop(0.45, "#464060");
+  g.addColorStop(1, "#181524");
+  ctx.fillStyle = g;
+  ctx.fillRect(cx - 7, ty + 3, 14, 34);
+  ctx.fillStyle = "#564f74";
+  ctx.fillRect(cx - 9, ty, 18, 4);
+  ctx.fillRect(cx - 9, ty + 35, 18, 4);
+  ctx.restore();
+}
+
+function drawStairsDecal(ctx: CanvasRenderingContext2D, sx: number, sy: number, t: number): void {
+  const pad = 7;
+  const w = TW - pad * 2;
+  const h = TH - pad * 2;
+  ctx.save();
+  // 深渊下沉石框
+  ctx.fillStyle = "#08060e";
+  ctx.beginPath();
+  ctx.roundRect(sx + pad, sy + pad, w, h, 4);
+  ctx.fill();
+
+  // 逐级下行石阶
+  for (let s = 0; s < 4; s++) {
+    const syStep = sy + pad + 3 + s * 8.5;
+    const shade = 68 - s * 13;
+    ctx.fillStyle = `rgb(${shade}, ${shade - 6}, ${shade + 14})`;
+    ctx.fillRect(sx + pad + 3 + s * 1.5, syStep, w - 6 - s * 3, 6.5);
+  }
+
+  // 底层透出的暖金火炬微光
+  const pulse = 0.28 + Math.sin(t * 3) * 0.08;
+  const g = ctx.createRadialGradient(sx + TW * 0.5, sy + TH - 10, 2, sx + TW * 0.5, sy + TH - 10, 22);
+  g.addColorStop(0, `rgba(255, 200, 92, ${pulse})`);
+  g.addColorStop(1, "rgba(255, 160, 50, 0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(sx + pad, sy + pad, w, h);
+
+  ctx.strokeStyle = "#8a7248";
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.roundRect(sx + pad, sy + pad, w, h, 4);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawPortalDecal(ctx: CanvasRenderingContext2D, sx: number, sy: number, t: number): void {
+  const cx = sx + TW * 0.5;
+  const cy = sy + TH * 0.54;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(1, 0.62);
+
+  const g = ctx.createRadialGradient(0, 0, 2, 0, 0, 23);
+  g.addColorStop(0, "#fff0c2");
+  g.addColorStop(0.38, "#a855f7");
+  g.addColorStop(0.78, "rgba(88, 28, 135, 0.72)");
+  g.addColorStop(1, "rgba(46, 16, 101, 0)");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(0, 0, 23, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.rotate(t * 1.5);
+  ctx.strokeStyle = "#e9d5ff";
+  ctx.lineWidth = 1.8;
+  ctx.setLineDash([5, 4]);
+  ctx.beginPath();
+  ctx.arc(0, 0, 17, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawCampfireProp(ctx: CanvasRenderingContext2D, cx: number, cy: number, t: number, vis: boolean): void {
+  ctx.save();
+  if (!vis) ctx.filter = "brightness(0.45)";
+  drawShadow(ctx, cx, cy + 6, 40);
+
+  // 围石圈
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const rx = cx + Math.cos(a) * 16;
+    const ry = cy + 4 + Math.sin(a) * 8;
+    ctx.fillStyle = i % 2 ? "#4a465c" : "#383448";
     ctx.beginPath();
-    ctx.ellipse(cx, cy, r, r * 0.6, 0, 0, Math.PI * 2);
+    ctx.ellipse(rx, ry, 4.5, 3.2, 0, 0, Math.PI * 2);
     ctx.fill();
   }
-  for (let i = 0; i < 3; i++) {
-    const a = t * 2.2 + (i * Math.PI * 2) / 3;
-    ctx.fillStyle = "#e8dcff";
+
+  // 交错焦木
+  ctx.strokeStyle = "#4f311c";
+  ctx.lineWidth = 4.5;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(cx - 11, cy + 6);
+  ctx.lineTo(cx + 11, cy - 1);
+  ctx.moveTo(cx + 11, cy + 6);
+  ctx.lineTo(cx - 11, cy - 1);
+  ctx.stroke();
+
+  // 跃动篝火
+  const sway = Math.sin(t * 7.2) * 2.4;
+  const hBoost = Math.cos(t * 9.5) * 2;
+  ctx.beginPath();
+  ctx.moveTo(cx - 10, cy + 3);
+  ctx.quadraticCurveTo(cx - 11, cy - 12, cx + sway, cy - 22 - hBoost);
+  ctx.quadraticCurveTo(cx + 11, cy - 12, cx + 10, cy + 3);
+  ctx.closePath();
+  ctx.fillStyle = "#ff5c24";
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(cx - 6.5, cy + 3);
+  ctx.quadraticCurveTo(cx - 6, cy - 8, cx + sway * 0.7, cy - 15 - hBoost * 0.6);
+  ctx.quadraticCurveTo(cx + 6, cy - 8, cx + 6.5, cy + 3);
+  ctx.closePath();
+  ctx.fillStyle = "#ffb703";
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 1, 3.5, 5, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "#fff8d6";
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawSpringProp(ctx: CanvasRenderingContext2D, cx: number, cy: number, t: number, vis: boolean): void {
+  ctx.save();
+  if (!vis) ctx.filter = "brightness(0.45)";
+  drawShadow(ctx, cx, cy + 7, 42);
+
+  // 雕花石池底座
+  ctx.fillStyle = "#494d63";
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 3, 19, 11, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#767d9c";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // 发光圣泉水面
+  const g = ctx.createRadialGradient(cx, cy + 2, 2, cx, cy + 2, 15);
+  g.addColorStop(0, "#e0faff");
+  g.addColorStop(0.45, "#38bdf8");
+  g.addColorStop(1, "#0369a1");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 2, 15, 8.2, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 水波涟漪
+  const r = 4 + ((t * 9) % 10);
+  ctx.strokeStyle = `rgba(255,255,255,${1 - (r - 4) / 10})`;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 2, r, r * 0.52, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawChestProp(ctx: CanvasRenderingContext2D, cx: number, cy: number, t: number, vis: boolean): void {
+  ctx.save();
+  if (!vis) ctx.filter = "brightness(0.45)";
+  drawShadow(ctx, cx, cy + 4, 36);
+
+  const w = 28, h = 20;
+  const x = cx - w * 0.5;
+  const y = cy - h + 4;
+
+  // 箱体橡木 + 弧顶
+  ctx.fillStyle = "#6e3d1e";
+  ctx.strokeStyle = "#16111f";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(x, y + 6, w, h - 6, 3);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = "#8c5129";
+  ctx.beginPath();
+  ctx.roundRect(x - 1, y, w + 2, 9, [5, 5, 1, 1]);
+  ctx.fill();
+  ctx.stroke();
+
+  // 鎏金箍带与锁扣
+  ctx.fillStyle = "#e6b347";
+  ctx.fillRect(x + 4, y + 1, 3.5, h - 2);
+  ctx.fillRect(x + w - 7.5, y + 1, 3.5, h - 2);
+  ctx.fillRect(cx - 3.5, y + 6, 7, 6);
+
+  // 金属闪光点
+  if (vis && Math.sin(t * 3.2) > 0.65) {
+    ctx.fillStyle = "#fff9db";
     ctx.beginPath();
-    ctx.ellipse(cx + Math.cos(a) * 13, cy + Math.sin(a) * 8, 2.4, 1.6, 0, 0, Math.PI * 2);
+    ctx.arc(cx + 5, y + 3, 2.2, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.restore();
 }
 
-// ---------------- 战斗画面 ----------------
-let combatT = 0;
-const combatAlive = new Set<number>(); // 上一帧仍存活的怪 id(检测死亡瞬间放爆裂)
+function drawMerchantProp(
+  ctx: CanvasRenderingContext2D,
+  sx: number, sy: number, cx: number, cy: number, t: number, vis: boolean,
+): void {
+  ctx.save();
+  if (!vis) ctx.filter = "brightness(0.45)";
+  // 波斯暗红织金地毯
+  ctx.fillStyle = "rgba(126, 29, 38, 0.85)";
+  ctx.beginPath();
+  ctx.roundRect(sx + 5, sy + 9, TW - 10, TH - 14, 3);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(229, 179, 75, 0.7)";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(sx + 8, sy + 12, TW - 16, TH - 20);
 
-/** 战斗演出锚点: 与 renderCombat 布局一致(供 App 发射粒子)。targetIdx 为目标怪序号。 */
-export function combatAnchor(canvas: { width: number; height: number }, targetIdx: number): {
-  px: number; py: number; tx: number; ty: number;
-} {
+  drawShadow(ctx, cx, cy, 34);
+  // 神秘斗篷行商剪影
+  const bob = Math.sin(t * 2.5) * 1.2;
+  ctx.fillStyle = "#2d2246";
+  ctx.strokeStyle = "#120d1d";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(cx - 12, cy);
+  ctx.quadraticCurveTo(cx - 10, cy - 28 + bob, cx, cy - 34 + bob);
+  ctx.quadraticCurveTo(cx + 10, cy - 28 + bob, cx + 12, cy);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // 兜帽金边与微光双眸
+  ctx.strokeStyle = "#d4a44c";
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.arc(cx, cy - 24 + bob, 6, Math.PI * 1.1, Math.PI * 1.9);
+  ctx.stroke();
+  ctx.fillStyle = "#7dd3fc";
+  ctx.fillRect(cx - 3, cy - 24 + bob, 2, 2);
+  ctx.fillRect(cx + 1.5, cy - 24 + bob, 2, 2);
+
+  // 手提暖光灯笼
+  ctx.fillStyle = "#ffd166";
+  ctx.beginPath();
+  ctx.arc(cx + 13, cy - 13 + bob, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+// ================================================================
+// 2. 横版高清插画战斗剧场
+// ================================================================
+let combatT = 0;
+const combatAlive = new Set<number>();
+
+/** 计算战斗中第 idx 只怪物的站位脚底坐标 (最多 5+ 只怪自动前后错列, 绝不超出右屏边界) */
+export function combatMonsterSlot(W: number, H: number, idx: number, total: number): [number, number] {
+  const baseFootY = H * 0.81;
+  if (total <= 1) return [W * 0.71, baseFootY];
+  if (total === 2) {
+    return idx === 0 ? [W * 0.64, baseFootY + 8] : [W * 0.81, baseFootY - 12];
+  }
+  const minX = W * 0.56;
+  const maxX = W * 0.88;
+  const t = idx / Math.max(1, total - 1);
+  const x = minX + (maxX - minX) * t;
+  const y = idx % 2 === 0 ? baseFootY + 12 : baseFootY - 14;
+  return [x, y];
+}
+
+/** 战斗演出锚点: 与 renderCombat 布局严格一致 */
+export function combatAnchor(
+  canvas: { width: number; height: number },
+  targetIdx: number,
+  totalMonsters = 1,
+): { px: number; py: number; tx: number; ty: number } {
   const W = canvas.width;
   const H = canvas.height;
+  const [mx, my] = combatMonsterSlot(W, H, targetIdx, totalMonsters);
   return {
-    px: W * 0.2 + 48,
-    py: H * 0.74 - 12,
-    tx: W * (0.54 + targetIdx * 0.12) + 32,
-    ty: H * 0.74 + 44 - 46,
+    px: W * 0.23 + 28,
+    py: H * 0.82 - H * 0.2,
+    tx: mx,
+    ty: my - H * 0.16,
   };
 }
 
+function drawCoverBg(ctx: CanvasRenderingContext2D, img: HTMLImageElement, w: number, h: number, ox = 0, oy = 0): void {
+  const scale = Math.max(w / img.naturalWidth, h / img.naturalHeight) * 1.04;
+  const dw = img.naturalWidth * scale;
+  const dh = img.naturalHeight * scale;
+  const dx = (w - dw) * 0.5 + ox;
+  const dy = (h - dh) * 0.5 + oy;
+  ctx.drawImage(img, dx, dy, dw, dh);
+}
+
 export function renderCombat(
-  ctx: CanvasRenderingContext2D, state: CombatState, player: PlayerState, playerSprite: string,
-  hp: number, mp: number, maxHpV: number, maxMpV: number, dt: number,
+  ctx: CanvasRenderingContext2D,
+  state: CombatState,
+  player: PlayerState,
+  playerSprite: string,
+  hp: number,
+  mp: number,
+  maxHpV: number,
+  maxMpV: number,
+  dt: number,
 ): void {
-  const W = ctx.canvas.width;
-  const H = ctx.canvas.height;
-  mainCanvas = ctx.canvas;
+  const cv = ctx.canvas as LogicalCanvas;
+  mainCanvas = cv;
+  const { w: W, h: H } = canvasLogicalSize(cv);
+
   if (hitStop > 0) {
     hitStop -= dt;
     dt *= 0.12;
   }
   combatT += dt;
   cam.shake = Math.max(0, cam.shake - dt * 22);
-  ctx.imageSmoothingEnabled = false;
 
-  // 背景: 洞窟 + 正交地面
-  const bg = ctx.createLinearGradient(0, 0, 0, H);
-  bg.addColorStop(0, "#131022");
-  bg.addColorStop(0.7, "#0d0a18");
-  bg.addColorStop(1, "#0a0812");
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, W, H);
-
-  const gy0 = H * 0.74;
-  // 背景墙: 立面排(带火把/旗子) + 上方四排墙顶, 构成完整洞窟后壁
-  for (let col = -1; col < W / TW + 1; col++) {
-    const face = tex("wall_mid");
-    const top = tex("wall_top_mid");
-    if (face) ctx.drawImage(face, col * TW, gy0 - TH, TW, TH);
-    for (let r = 2; r <= 5; r++) {
-      if (top) ctx.drawImage(top, col * TW, gy0 - r * TH, TW, TH);
-    }
-    // 立面装饰
-    const n = hash2(col * 13 + 7, 3);
-    const cx = col * TW + TW / 2;
-    if (n < 0.22) {
-      drawWallTorch(ctx, cx, gy0 - TH + WALL_H, combatT * 0.4 + col);
-    } else if (n < 0.34) {
-      const img = tex(n < 0.28 ? "wall_banner_red" : "wall_banner_blue");
-      if (img) ctx.drawImage(img, cx - 12, gy0 - TH + 10, 24, 24);
-    } else if (n < 0.4) {
-      const img = tex("wall_column_mid");
-      if (img) ctx.drawImage(img, cx - 16, gy0 - TH + 6, 32, 32);
-    }
-  }
-  // 地平线雾气: 上排墙顶渐隐进黑暗
-  const fog = ctx.createLinearGradient(0, gy0 - 4.2 * TH, 0, gy0 - 1.2 * TH);
-  fog.addColorStop(0, "rgba(10,8,18,0.95)");
-  fog.addColorStop(1, "rgba(20,16,38,0.1)");
-  ctx.fillStyle = fog;
-  ctx.fillRect(0, gy0 - 4.2 * TH, W, 3 * TH);
-
-  // 地面砖阵(0x72 地板, 行距 24 重叠铺出纵深)
-  for (let row = 0; row < 6; row++) {
-    for (let col = -1; col < W / TW + 1; col++) {
-      drawFloorTile(ctx, col + row * 7, row, col * TW, gy0 + row * 24);
-    }
-  }
-  ctx.fillStyle = "rgba(6,5,14,0.35)";
-  ctx.fillRect(0, gy0 - 8, W, H - gy0 + 8);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
 
   const shakeX = cam.shake > 0 ? Math.sin(combatT * 70) * cam.shake : 0;
   const shakeY = cam.shake > 0 ? Math.cos(combatT * 63) * cam.shake * 0.7 : 0;
+
+  // 1) 高清手绘主题战斗背景 (石牢 / 菌穴 / 狱岩)
+  const bgImg = hdImg(dungeonCombatBgKey());
+  if (bgImg) {
+    drawCoverBg(ctx, bgImg, W, H, shakeX * 0.45, shakeY * 0.45);
+    // 适度压暗背景远景, 让前景立绘与刀光粒子更突出
+    const stageOverlay = ctx.createLinearGradient(0, 0, 0, H);
+    stageOverlay.addColorStop(0, "rgba(6, 5, 14, 0.34)");
+    stageOverlay.addColorStop(0.65, "rgba(8, 6, 16, 0.16)");
+    stageOverlay.addColorStop(1, "rgba(5, 4, 12, 0.48)");
+    ctx.fillStyle = stageOverlay;
+    ctx.fillRect(0, 0, W, H);
+  } else {
+    const bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, "#151126");
+    bg.addColorStop(1, "#090712");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+  }
+
   ctx.save();
   ctx.translate(shakeX, shakeY);
 
-  const footY = gy0 + 44; // 站位: 脚底锚定
+  const totalM = state.monsters.length;
+  const primaryTarget = state.monsters.find((m) => m.hp > 0);
 
-  // 怪物(右上排开, idle 动画, 死亡爆裂)
-  for (let i = 0; i < state.monsters.length; i++) {
-    const m = state.monsters[i];
-    const mx = Math.round(W * (0.54 + i * 0.12));
+  // 按站位 Y 升序绘制怪物(后排先画, 前排后画, 自然透视遮挡)
+  const indexedMonsters = state.monsters.map((m, i) => {
+    const [mx, my] = combatMonsterSlot(W, H, i, totalM);
+    return { m, i, mx, my };
+  });
+  indexedMonsters.sort((a, b) => a.my - b.my);
+
+  for (const { m, i, mx, my } of indexedMonsters) {
     if (m.hp <= 0) {
       if (combatAlive.has(m.id)) {
         combatAlive.delete(m.id);
-        fx.crit(mx + 32, footY - 56);
-        fx.hit(mx + 32, footY - 56);
+        fx.crit(mx, my - H * 0.16);
+        fx.hit(mx, my - H * 0.16);
       }
       continue;
     }
     combatAlive.add(m.id);
-    const img = frame(MON_ANIM[m.body]?.idle ?? m.body, Math.floor(combatT * 6 + i));
-    if (!img) continue;
-    // 按目标高度归一(不同怪帧高 16~28 不等, 视觉高度统一)
-    const hTarget = 108 * (m.boss ? 1.35 : 1);
-    const s = hTarget / img.height;
-    const sw = img.width * s;
-    const sh = img.height * s;
-    const bob = Math.sin(combatT * 3 + i * 1.7) * 3;
-    const kw = 52;
-    ctx.fillStyle = "#0d0b16";
-    ctx.fillRect(mx, footY - sh - 22 + bob, kw, 5);
-    ctx.fillStyle = m.boss ? "#ff4b4b" : "#4ade80";
-    ctx.fillRect(mx, footY - sh - 22 + bob, Math.max(1, (kw * m.hp) / m.maxHp), 5);
-    ctx.font = "11px monospace";
-    ctx.fillStyle = m.boss ? "#ff9b9b" : "#b8b8d0";
-    ctx.fillText(m.name.slice(0, 9), mx, footY - sh - 26 + bob);
-    drawShadow(ctx, mx + sw / 2, footY - 4, sw * 0.7);
+
+    // 血量延迟白条平滑追赶
+    const prevTrail = combatTrailHp.get(m.id) ?? m.hp;
+    const nextTrail = prevTrail > m.hp ? Math.max(m.hp, prevTrail - m.maxHp * dt * 1.6) : m.hp;
+    combatTrailHp.set(m.id, nextTrail);
+
+    const recoil = m.hurtFlash > 0 ? Math.sin((m.hurtFlash / 0.25) * Math.PI) * 18 : 0;
+    const drawX = mx + recoil;
+    const targetH = H * (m.boss ? 0.48 : m.elite ? 0.39 : 0.33);
+
+    // 锁定准星光环(当前普攻/单体技能默认锁定的第一只活怪)
+    if (primaryTarget && primaryTarget.id === m.id) {
+      drawTargetReticle(ctx, drawX, my - 2, m.boss ? 48 : 36, combatT);
+    } else if (m.boss || m.elite) {
+      drawAuraCircle(ctx, drawX, my - 2, m.boss ? 46 : 34, m.boss ? "#ff5238" : "#b36bff", combatT);
+    }
+
+    drawShadow(ctx, drawX, my, targetH * 0.66);
+    drawIllustratedActor(ctx, monsterHdKey(m.body), drawX, my, targetH, 1, {
+      breathPhase: combatT * 3.2 + i * 1.5,
+      leanRad: m.hurtFlash > 0 ? 0.08 : 0,
+      hurtFlash: m.hurtFlash,
+      fallbackColor: "#ef4444",
+    });
+
+    // 头顶精致血条与名字铭牌
+    const barW = m.boss ? 92 : 68;
+    const barY = my - targetH - 14;
+    drawCombatHpBar(
+      ctx,
+      drawX - barW * 0.5,
+      barY,
+      barW,
+      6,
+      m.hp / m.maxHp,
+      nextTrail / m.maxHp,
+      m.boss ? "#ff4b3e" : m.elite ? "#c084fc" : "#ef4444",
+    );
     ctx.save();
-    if (m.hurtFlash > 0) ctx.filter = "brightness(2.6) saturate(0.4)";
-    ctx.drawImage(img, mx, footY - sh + bob, sw, sh);
+    ctx.textAlign = "center";
+    ctx.font = '600 12px "Noto Serif SC", "PingFang SC", sans-serif';
+    ctx.strokeStyle = "rgba(6, 5, 14, 0.92)";
+    ctx.lineWidth = 3.5;
+    const title = m.name.length > 10 ? m.name.slice(0, 10) : m.name;
+    ctx.strokeText(title, drawX, barY - 5);
+    ctx.fillStyle = m.boss ? "#ffb4a2" : m.elite ? "#e9d5ff" : "#e2e0f0";
+    ctx.fillText(title, drawX, barY - 5);
     ctx.restore();
-    m.hurtFlash -= dt;
+
+    m.hurtFlash = Math.max(0, m.hurtFlash - dt);
   }
 
-  // 玩家(左, 攻击前冲用 hit 帧): 24x24 建模
-  const lunge = Math.sin(lungeT * Math.PI) * 30;
-  const anim = HERO_ANIM[playerSprite] ?? HERO_ANIM.hero_mage;
-  const px = Math.round(W * 0.2 + lunge);
-  const hPhase = lungeT > 0.4 ? 1 : Math.floor(combatT * 2) % 2;
-  drawShadow(ctx, px + 54, footY - 4, 60);
-  blitHero24(ctx, playerSprite, hPhase, px + 54, footY, 1, 1);
-  drawWeapon(ctx, anim.weapon, px + 54, footY, lungeT, facing, 5);
-  // 玩家参照血蓝条锚在头顶
-  bar(ctx, px + 12, footY - 130, 96, 6, hp / maxHpV, "#ff4b4b");
-  bar(ctx, px + 12, footY - 119, 96, 5, mp / maxMpV, "#5b9cff");
-  ctx.font = "bold 12px monospace";
-  ctx.fillStyle = "#e8e8f4";
-  ctx.fillText(`Lv${player.level} ${player.cls}`, px + 12, footY - 135);
-  lungeT = Math.max(0, lungeT - dt * 4);
+  // 2) 左侧主角立绘 + 冲刺斩击动作
+  const lunge = Math.sin(lungeT * Math.PI) * 46;
+  const heroX = W * 0.22 + lunge;
+  const heroFootY = H * 0.83;
+  const heroH = H * 0.42;
 
-  // 悬浮尘埃
-  if (Math.random() < dt * 4) fx.dust(Math.random() * W, gy0 - Math.random() * 130);
+  drawAuraCircle(ctx, heroX, heroFootY - 2, 38, "rgba(244, 203, 105, 0.65)", -combatT * 0.6);
+  drawShadow(ctx, heroX, heroFootY, heroH * 0.64);
+  drawIllustratedActor(ctx, playerSprite, heroX, heroFootY, heroH, 1, {
+    breathPhase: combatT * 3.0,
+    leanRad: lungeT > 0.05 ? 0.16 * Math.sin(lungeT * Math.PI) : 0,
+    fallbackColor: "#eab308",
+  });
+
+  // 主角头顶简洁状态条
+  const hBarW = 86;
+  const hBarY = heroFootY - heroH - 16;
+  drawCombatHpBar(ctx, heroX - hBarW * 0.5, hBarY, hBarW, 6, hp / maxHpV, hp / maxHpV, "#22c55e");
+  drawMiniBar(ctx, heroX - hBarW * 0.5, hBarY + 8, hBarW, 4, mp / maxMpV, "#3b82f6");
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.font = '700 12px "Noto Serif SC", "PingFang SC", sans-serif';
+  ctx.strokeStyle = "rgba(6, 5, 14, 0.92)";
+  ctx.lineWidth = 3.5;
+  ctx.strokeText(`Lv.${player.level} ${player.cls}`, heroX, hBarY - 5);
+  ctx.fillStyle = "#f6d88c";
+  ctx.fillText(`Lv.${player.level} ${player.cls}`, heroX, hBarY - 5);
+  ctx.restore();
+
+  lungeT = Math.max(0, lungeT - dt * 4.2);
+
+  // 3) 战场悬浮余烬/微尘与刀光粒子
+  if (Math.random() < dt * 5) {
+    fx.dust(Math.random() * W, H * (0.35 + Math.random() * 0.5), currentTheme().accentGlow);
+  }
   fx.updateFx(dt);
   fx.drawFx(ctx);
   ctx.restore();
 
-  // 光照氛围(玩家暖光 + 怪物各自亮光, 暗幕调淡)
-  drawLighting(ctx, W, H, [
-    { x: px + 32, y: footY - 56, radius: 260, intensity: 0.92, warm: "255,205,160" },
-    ...state.monsters.filter((m) => m.hp > 0).map((m) => ({
-      x: W * (0.54 + state.monsters.indexOf(m) * 0.12) + 32,
-      y: footY - 52,
-      radius: 150,
-      intensity: 0.92,
-      flicker: !!m.boss,
-      warm: m.boss ? "255,90,70" : "255,195,160",
-    })),
-  ], combatT, "rgba(5,6,14,0.48)");
+  // 4) 战场戏剧化聚光与暗角 (较轻的暗幕保留高清背景细节)
+  const combatLights: Light[] = [
+    { x: heroX, y: heroFootY - heroH * 0.5, radius: 260, intensity: 0.95, warm: "255,205,155" },
+    ...indexedMonsters
+      .filter((x) => x.m.hp > 0)
+      .map((x) => ({
+        x: x.mx,
+        y: x.my - H * 0.18,
+        radius: x.m.boss ? 220 : 165,
+        intensity: 0.92,
+        flicker: x.m.boss,
+        warm: x.m.boss ? "255,96,64" : "255,195,155",
+      })),
+  ];
+  drawLighting(ctx, W, H, combatLights, combatT, "rgba(5, 5, 14, 0.28)");
   drawVignette(ctx, W, H);
-  drawGradeAndScanlines(ctx, W, H);
 
-  // 飘字(暴击金色大字)
+  // 5) 伤害/治疗飘字 (带暴击放大弹跳演出)
   for (let i = state.floats.length - 1; i >= 0; i--) {
     const f = state.floats[i];
     f.t -= dt;
     if (f.t <= 0) { state.floats.splice(i, 1); continue; }
     const isCrit = f.color === "#ffd23e";
-    ctx.save();
-    ctx.globalAlpha = Math.min(1, f.t * 1.6);
-    ctx.font = isCrit ? "bold 24px monospace" : "bold 15px monospace";
-    ctx.strokeStyle = "#0d0b16";
-    ctx.lineWidth = isCrit ? 4 : 3;
+    const progress = 1 - f.t; // 0 -> 1
+    const pop = progress < 0.16 ? 0.7 + (progress / 0.16) * 0.55 : Math.max(1, 1.25 - (progress - 0.16) * 0.35);
     const fx2 = f.x * W;
-    const fy = f.y * H - (1 - f.t) * 34;
-    ctx.strokeText(f.text, fx2, fy);
+    const fy = f.y * H - progress * 44;
+
+    ctx.save();
+    ctx.translate(fx2, fy);
+    ctx.scale(pop, pop);
+    ctx.globalAlpha = Math.min(1, f.t * 1.7);
+    ctx.textAlign = "center";
+    ctx.font = isCrit
+      ? '800 26px "Cinzel", "Noto Serif SC", serif'
+      : '700 17px "Cinzel", "Noto Serif SC", sans-serif';
+    ctx.strokeStyle = "#080610";
+    ctx.lineWidth = isCrit ? 5 : 3.5;
+    ctx.strokeText(f.text, 0, 0);
     ctx.fillStyle = f.color;
-    ctx.fillText(f.text, fx2, fy);
+    ctx.fillText(f.text, 0, 0);
     ctx.restore();
   }
 }
 
-function bar(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, ratio: number, color: string): void {
-  ctx.fillStyle = "#0d0b16";
+function drawTargetReticle(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, t: number): void {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(1, 0.44);
+  ctx.rotate(-t * 1.4);
+  ctx.strokeStyle = "#fbbf24";
+  ctx.lineWidth = 2.4;
+  for (let i = 0; i < 4; i++) {
+    const a0 = (i * Math.PI) / 2 + 0.22;
+    const a1 = ((i + 1) * Math.PI) / 2 - 0.22;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, a0, a1);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawMiniBar(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number, ratio: number, color: string,
+): void {
+  const r = Math.max(0, Math.min(1, ratio));
+  ctx.fillStyle = "rgba(10, 8, 18, 0.88)";
   ctx.fillRect(x, y, w, h);
   ctx.fillStyle = color;
-  ctx.fillRect(x, y, Math.max(0, Math.round(w * Math.min(1, Math.max(0, ratio)))), h);
-  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.fillRect(x, y, Math.round(w * r), h);
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.16)";
   ctx.lineWidth = 1;
   ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 }
 
-// ---------------- 后处理: 扫描线 + 色调分级 ----------------
-let scanPattern: CanvasPattern | null = null;
+function drawCombatHpBar(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+  ratio: number, trailRatio: number, color: string,
+): void {
+  const r = Math.max(0, Math.min(1, ratio));
+  const tr = Math.max(r, Math.min(1, trailRatio));
+  ctx.fillStyle = "rgba(9, 7, 16, 0.9)";
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, 3);
+  ctx.fill();
 
-/** 极淡 CRT 扫描线(烘焙 pattern) + 顶冷底暖色调分级, 叠出复古氛围 */
-function drawGradeAndScanlines(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-  if (!scanPattern) {
-    const pc = document.createElement("canvas");
-    pc.width = 1;
-    pc.height = 3;
-    const pctx = pc.getContext("2d")!;
-    pctx.fillStyle = "rgba(0,0,0,0.07)";
-    pctx.fillRect(0, 2, 1, 1);
-    scanPattern = ctx.createPattern(pc, "repeat");
+  if (tr > r) {
+    ctx.fillStyle = "rgba(255, 240, 200, 0.85)";
+    ctx.beginPath();
+    ctx.roundRect(x, y, Math.max(2, w * tr), h, 3);
+    ctx.fill();
   }
-  if (scanPattern) {
-    ctx.fillStyle = scanPattern;
-    ctx.fillRect(0, 0, w, h);
+
+  if (r > 0) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.roundRect(x, y, Math.max(2, w * r), h, 3);
+    ctx.fill();
   }
-  // 色调分级: 上方偏冷蓝, 下方偏暖橙(极低透明度)
-  ctx.save();
-  ctx.globalCompositeOperation = "soft-light";
-  const g = ctx.createLinearGradient(0, 0, 0, h);
-  g.addColorStop(0, "rgba(90,110,220,0.16)");
-  g.addColorStop(0.6, "rgba(0,0,0,0)");
-  g.addColorStop(1, "rgba(255,150,70,0.18)");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, w, h);
-  ctx.restore();
+
+  ctx.strokeStyle = "rgba(212, 164, 76, 0.45)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, 3);
+  ctx.stroke();
 }
