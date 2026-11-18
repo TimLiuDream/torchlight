@@ -8,13 +8,16 @@ import {
   removeMonsters, setTile, tileAt, tryMovePlayer, isBossFloor,
 } from "./game/dungeon";
 import {
-  enemyTurn, playerAction, settleVictory, startCombat,
+  enemySingleAttack, finishEnemyRound, playerAction, settleVictory, startCombat,
 } from "./game/combat";
 import type { Action } from "./game/combat";
 import type { CombatState, Equipment, FloorMap, LogLine, Monster, PlayerState, SkillNode, StatKey } from "./game/types";
 import {
-  addWorldFloat, attackAnim, clearSceneFx, combatAnchor, dungeonThemeName, faceDir, gameCanvasSize, hitStopFx, renderCombat, renderDungeon, setDungeonTheme, shakeCam, startFloorTransition,
-  worldToScreenCam,
+  addWorldFloat, attackAnim, clearSceneFx, combatAnchor, combatMonsterSlot,
+  dungeonThemeName, faceDir, gameCanvasSize, hitStopFx,
+  playHeroAction, playMonsterAttack, renderCombat, renderDungeon,
+  resetCombatAnim, setDungeonTheme, shakeCam, startFloorTransition,
+  triggerMonsterHit, worldToScreenCam,
 } from "./render/renderer";
 import * as fx from "./render/particles";
 import { ActionBar, BossBar, Minimap, Orb } from "./ui/Hud";
@@ -52,6 +55,8 @@ export default function App() {
   const merchantRef = useRef<MerchantOffer | null>(null);
   const dungeonLogRef = useRef<LogLine[]>([]);
   const enemyTimerRef = useRef<number | null>(null);
+  const combatBusyRef = useRef(false);
+  const battleGenRef = useRef(0);
   const victoryGoldRef = useRef({ gold: 0, exp: 0, levels: 0 });
   const spriteKeyRef = useRef("hero_mage");
 
@@ -110,7 +115,10 @@ export default function App() {
 
   // ---------------- 死亡 ----------------
   const die = () => {
+    battleGenRef.current += 1;
+    combatBusyRef.current = false;
     if (enemyTimerRef.current) window.clearTimeout(enemyTimerRef.current);
+    resetCombatAnim();
     clearSave();
     setOverlay(null);
     setScene("dead");
@@ -140,12 +148,18 @@ export default function App() {
   // ---------------- 战斗 ----------------
   const startCombatWith = (monsters: Monster[]) => {
     if (!monsters.length) return;
+    battleGenRef.current += 1;
+    combatBusyRef.current = false;
+    resetCombatAnim();
     combatRef.current = startCombat(playerRef.current!, monsters, floorRef.current);
     setOverlay(null);
     force();
   };
 
   const finishCombat = () => {
+    battleGenRef.current += 1;
+    combatBusyRef.current = false;
+    resetCombatAnim();
     const state = combatRef.current!;
     const p = playerRef.current!;
     const map = mapRef.current!;
@@ -176,54 +190,150 @@ export default function App() {
   const onCombatAction = (action: Action) => {
     const state = combatRef.current;
     const p = playerRef.current;
-    if (!state || !p || phaseOf(state) !== "player") return;
-    // 战斗演出锚点(与 renderer 布局同一坐标系), 目标取第一只活怪
-    const targetIdx = Math.max(0, state.monsters.findIndex((m) => m.hp > 0));
-    const { w: CW, h: CH } = gameCanvasSize();
-    const anchor = combatAnchor({ width: CW, height: CH }, targetIdx, state.monsters.length);
-    const px = anchor.px;
-    const py = anchor.py;
-    const tx = anchor.tx;
-    const ty = anchor.ty;
-    const res = playerAction(state, p, rngRef.current, action);
-    if (!res.ok) { force(); return; }
+    if (!state || !p || phaseOf(state) !== "player" || combatBusyRef.current) return;
 
-    if (action.kind === "attack" || action.kind === "skill") {
-      attackAnim();
-      const isCrit = res.crit;
-      if (action.kind === "skill") {
-        const sk = p.skill.kind;
-        if (sk === "aoe") fx.meteorRain(CW * 0.72, ty);
-        else if (sk === "whirl" || sk === "leechWhirl") fx.whirl(tx, ty, sk === "leechWhirl");
-        else if (sk === "drone" || sk === "healBig") { fx.repairSpark(px, py); fx.heal(px, py); }
-        else if (sk === "summon") { fx.repairSpark(px + 20, py - 10); fx.meteorRain(CW * 0.72, ty); }
-        else fx.flame(px, py, tx, ty);
-      }
-      fx.hit(tx, ty);
-      if (isCrit) {
-        fx.crit(tx, ty);
-        shakeCam(9.5);
-        hitStopFx(0.055);
-      } else {
-        shakeCam(3.8);
-      }
-    } else if (action.kind === "potion" && action.which === "血瓶") {
-      fx.heal(px, py);
+    // 行动合法性前置校验: 法力或药水不足时直接提示, 不进入出招动画
+    if (action.kind === "skill" && p.mp < p.skill.cost) {
+      playerAction(state, p, rngRef.current, action);
+      force();
+      return;
+    }
+    if (action.kind === "potion" && p.potions[action.which] <= 0) {
+      playerAction(state, p, rngRef.current, action);
+      force();
+      return;
     }
 
-    if (phaseOf(state) === "won") { finishCombat(); return; }
-    if (phaseOf(state) === "lost") { die(); return; }
+    const gen = battleGenRef.current;
+    combatBusyRef.current = true;
     force();
-    enemyTimerRef.current = window.setTimeout(() => {
-      const s = combatRef.current;
-      if (!s) return;
-      const hpBefore = p.hp;
-      const alive = enemyTurn(s, p, rngRef.current);
-      if (!alive) { shakeCam(11); die(); return; }
-      if (p.hp < hpBefore) shakeCam(6);
-      if (phaseOf(s) === "won") { finishCombat(); return; }
-      force();
-    }, 420);
+
+    const { w: CW, h: CH } = gameCanvasSize();
+    const totalM = state.monsters.length;
+    const targetIdx = Math.max(0, state.monsters.findIndex((m) => m.hp > 0));
+    const anchor = combatAnchor({ width: CW, height: CH }, targetIdx, totalM);
+    const heroBaseX = CW * 0.22;
+    const heroFootY = CH * 0.83;
+    const heroH = CH * 0.42;
+
+    const allTargets: Array<[number, number]> = state.monsters
+      .map((m, i) => ({ m, i }))
+      .filter((x) => x.m.hp > 0)
+      .map(({ i }) => {
+        const [mx, my] = combatMonsterSlot(CW, CH, i, totalM);
+        return [mx, my - CH * 0.16];
+      });
+
+    // 敌方逐只出击动画队列
+    const runEnemyQueue = (idxInLiving: number) => {
+      if (battleGenRef.current !== gen) return;
+      const curState = combatRef.current;
+      if (!curState || p.hp <= 0) return;
+
+      const living = curState.monsters
+        .map((m, slotIdx) => ({ m, slotIdx }))
+        .filter((x) => x.m.hp > 0);
+
+      if (idxInLiving >= living.length) {
+        finishEnemyRound(curState, p);
+        combatBusyRef.current = false;
+        if (phaseOf(curState) === "won") finishCombat();
+        else force();
+        return;
+      }
+
+      const { m, slotIdx } = living[idxInLiving];
+      const { w: W2, h: H2 } = gameCanvasSize();
+      const [mx, my] = combatMonsterSlot(W2, H2, slotIdx, curState.monsters.length);
+      const monH = H2 * (m.boss ? 0.48 : m.elite ? 0.39 : 0.33);
+
+      playMonsterAttack({
+        monId: m.id,
+        body: m.body,
+        boss: m.boss,
+        monBaseX: mx,
+        monFootY: my,
+        monH,
+        heroBaseX: W2 * 0.22,
+        heroFootY: H2 * 0.83,
+        heroH: H2 * 0.42,
+        onImpact: () => {
+          if (battleGenRef.current !== gen) return;
+          const { alive } = enemySingleAttack(curState, m, p, rngRef.current);
+          shakeCam(m.boss ? 9.5 : 5.5);
+          force();
+          if (!alive) {
+            shakeCam(12);
+            enemyTimerRef.current = window.setTimeout(() => {
+              if (battleGenRef.current === gen) die();
+            }, 280);
+          }
+        },
+        onDone: () => {
+          if (battleGenRef.current !== gen || p.hp <= 0) return;
+          runEnemyQueue(idxInLiving + 1);
+        },
+      });
+    };
+
+    // 启动主角出招动画(冲刺斩击 / 吟唱飞行弹道 / 饮药)
+    playHeroAction({
+      cls: p.cls,
+      spriteKey: spriteKeyRef.current,
+      actionKind: action.kind,
+      skillKind: p.skill.kind,
+      heroBaseX,
+      heroFootY,
+      heroH,
+      targetPos: [anchor.tx, anchor.ty],
+      allTargets,
+      onImpact: () => {
+        if (battleGenRef.current !== gen) return;
+        const hpSnap = state.monsters.map((m) => m.hp);
+        const res = playerAction(state, p, rngRef.current, action);
+        if (!res.ok) return;
+
+        if (action.kind === "attack" || action.kind === "skill") {
+          attackAnim();
+          const isCrit = res.crit;
+          const sk = p.skill.kind;
+
+          // 对所有本次掉血的怪物触发受击骨骼弯曲、击退闪白与刀光火花
+          state.monsters.forEach((m, idx) => {
+            if (m.hp < hpSnap[idx]) {
+              const [mx, my] = combatMonsterSlot(CW, CH, idx, totalM);
+              const hitY = my - CH * 0.16;
+              triggerMonsterHit(m.id, isCrit || action.kind === "skill");
+              fx.hit(mx, hitY);
+              if (isCrit) fx.crit(mx, hitY);
+            }
+          });
+
+          if (action.kind === "skill") {
+            if (sk === "whirl" || sk === "leechWhirl") fx.whirl(anchor.tx, anchor.ty, sk === "leechWhirl");
+            else if (sk === "drone" || sk === "healBig") { fx.repairSpark(anchor.px, anchor.py); fx.heal(anchor.px, anchor.py); }
+            else if (sk === "summon") fx.repairSpark(anchor.tx, anchor.ty);
+            else if (sk !== "aoe") fx.flame(anchor.tx - 30, anchor.ty - 10, anchor.tx, anchor.ty);
+          }
+
+          if (isCrit) {
+            shakeCam(10);
+            hitStopFx(0.06);
+          } else {
+            shakeCam(4.5);
+          }
+        } else if (action.kind === "potion") {
+          fx.heal(anchor.px, anchor.py);
+        }
+        force();
+      },
+      onDone: () => {
+        if (battleGenRef.current !== gen) return;
+        if (phaseOf(state) === "won") { finishCombat(); return; }
+        if (phaseOf(state) === "lost") { die(); return; }
+        runEnemyQueue(0);
+      },
+    });
   };
 
   // ---------------- 地牢交互 ----------------
@@ -650,7 +760,7 @@ export default function App() {
         <ActionBar
           player={p}
           spriteKey={spriteKeyRef.current}
-          inCombat={!!combat}
+          inCombat={!!combat && !combatBusyRef.current && combat.phase === "player"}
           onAction={onCombatAction}
           onOpenInv={() => { setOverlay(overlay === "inv" ? null : "inv"); force(); }}
           onOpenSkill={() => { setOverlay(overlay === "skill" ? null : "skill"); force(); }}

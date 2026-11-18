@@ -163,23 +163,41 @@ export function playerAction(state: CombatState, player: PlayerState, rng: Rng, 
   return { ok: true, crit };
 }
 
-/** 敌方一轮行动。返回 false 表示玩家死亡。 */
-export function enemyTurn(state: CombatState, player: PlayerState, rng: Rng): boolean {
-  for (const m of livingTargets(state)) {
-    const dmg = Math.max(1, Math.floor(m.atk * rng.uniform(0.85, 1.15)));
-    player.hp -= dmg;
-    log(state, `${m.name} 对你造成 ${dmg} 点伤害。`, "damage");
-    state.floats.push({ text: `-${dmg}`, x: 0.28, y: 0.42, color: "#ff6b6b", t: 1.0 });
-    if (player.hp <= 0) {
-      player.hp = 0;
-      state.phase = "lost";
-      return false;
-    }
+/** 单只怪物发起一次攻击结算。返回本次伤害与玩家是否存活。 */
+export function enemySingleAttack(
+  state: CombatState,
+  m: CombatMonster,
+  player: PlayerState,
+  rng: Rng,
+): { dmg: number; alive: boolean } {
+  if (m.hp <= 0 || player.hp <= 0) return { dmg: 0, alive: player.hp > 0 };
+  const dmg = Math.max(1, Math.floor(m.atk * rng.uniform(0.85, 1.15)));
+  player.hp -= dmg;
+  log(state, `${m.name} 对你造成 ${dmg} 点伤害。`, "damage");
+  state.floats.push({ text: `-${dmg}`, x: 0.23, y: 0.43, color: "#ff6b6b", t: 1.0 });
+  if (player.hp <= 0) {
+    player.hp = 0;
+    state.phase = "lost";
+    return { dmg, alive: false };
   }
+  return { dmg, alive: true };
+}
+
+/** 敌方全体行动完毕后的回合收尾(回蓝 + 推进回合)。 */
+export function finishEnemyRound(state: CombatState, player: PlayerState): void {
   player.mp = Math.min(player.maxMp, player.mp + playerRegen(player));
   state.round += 1;
   if (!livingTargets(state).length) state.phase = "won";
   else state.phase = "player";
+}
+
+/** 敌方一轮行动(供无头测试同步调用)。返回 false 表示玩家死亡。 */
+export function enemyTurn(state: CombatState, player: PlayerState, rng: Rng): boolean {
+  for (const m of livingTargets(state)) {
+    const { alive } = enemySingleAttack(state, m, player, rng);
+    if (!alive) return false;
+  }
+  finishEnemyRound(state, player);
   return true;
 }
 
