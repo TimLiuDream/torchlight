@@ -5,7 +5,7 @@ import {
   adjacentMonsters, generateFloor, gatherCombatants, isCampFloor, isBossFloor,
   monsterTurn, removeMonsters, setTile, tileAt, tryMovePlayer,
 } from "./dungeon";
-import { createPlayer, gainExp, makeElite, maxHp, playerAtk, recLevel, resetMonsterIds, rollEquipment, wear } from "./player";
+import { createPlayer, gainExp, makeElite, maxHp, playerAtk, recLevel, resetMonsterIds, rollEquipment, sellEquipment, usePotion, wear } from "./player";
 import { Rng } from "./rng";
 import { enemyTurn, playerAction, settleVictory, startCombat, type Action } from "./combat";
 
@@ -161,6 +161,73 @@ console.log("== 冒烟: 装备/成长/营地层数 ==");
   check("营地每 3 层", isCampFloor(3) && isCampFloor(6) && !isCampFloor(4));
   check("首领 5 层且避开营地", isBossFloor(5) && isBossFloor(10) && !isBossFloor(15));
   check("建议等级", recLevel(0) === 1 && recLevel(7) === 3);
+}
+
+console.log("== 冒烟: 战斗内外药剂结算 ==");
+{
+  const p = createPlayer(CLASSES["2"]);
+  p.hp = 1;
+  const hpRestored = usePotion(p, "血瓶");
+  check("非战斗可喝血瓶并扣一瓶", hpRestored === 60 && p.hp === 61 && p.potions["血瓶"] === 1);
+  check("血瓶不影响法力及蓝瓶", p.mp === p.maxMp && p.potions["蓝瓶"] === 1);
+  p.hp = maxHp(p) - 5;
+  check("血瓶恢复不超过生命上限", usePotion(p, "血瓶") === 5 && p.hp === maxHp(p));
+  p.hp -= 10;
+  const hpBefore = p.hp;
+  check("没有血瓶时无效且不改变生命", usePotion(p, "血瓶") === null && p.hp === hpBefore && p.potions["血瓶"] === 0);
+  p.mp = 2;
+  check("非战斗可喝蓝瓶且不超过法力上限", usePotion(p, "蓝瓶") === 23 && p.mp === p.maxMp && p.potions["蓝瓶"] === 0);
+  const mpBefore = p.mp;
+  check("没有蓝瓶时无效且不改变法力", usePotion(p, "蓝瓶") === null && p.mp === mpBefore && p.potions["蓝瓶"] === 0);
+
+  p.level = 3;
+  p.hp = 1;
+  p.potions["血瓶"] = 1;
+  check("血瓶恢复量随等级增长", usePotion(p, "血瓶") === 80 && p.hp === 81);
+  const mage = createPlayer(CLASSES["1"]);
+  mage.mp = 0;
+  check("蓝瓶按固定数值恢复", usePotion(mage, "蓝瓶") === 25 && mage.mp === 25);
+
+  const rng = new Rng(17);
+  const enemy = makeElite(rng, 1, 0, 0);
+  for (const which of ["血瓶", "蓝瓶"] as const) {
+    const combatPlayer = createPlayer(CLASSES["2"]);
+    combatPlayer.hp = 1;
+    combatPlayer.mp = 0;
+    const state = startCombat(combatPlayer, [enemy], 1);
+    const count = combatPlayer.potions[which];
+    const res = playerAction(state, combatPlayer, rng, { kind: "potion", which });
+    check(`战斗喝${which}仍消耗回合`, res.ok && state.phase === "enemy" && combatPlayer.potions[which] === count - 1);
+    check(`战斗喝${which}使用共用恢复公式`, which === "血瓶" ? combatPlayer.hp === 61 : combatPlayer.mp === 25);
+    state.phase = "player";
+    combatPlayer.potions[which] = 0;
+    const invalid = playerAction(state, combatPlayer, rng, { kind: "potion", which });
+    check(`战斗缺少${which}不消耗回合`, !invalid.ok && state.phase === "player");
+  }
+}
+
+console.log("== 冒烟: 逐件出售背包装备 ==");
+{
+  const rng = new Rng(29);
+  const p = createPlayer(CLASSES["2"]);
+  const first = rollEquipment(rng, 3);
+  const second = { ...first }; // 同名同属性的另一件装备, 必须按物品引用区分
+  const equipped = rollEquipment(rng, 3);
+  p.equip[equipped.slot] = equipped;
+  p.bag = [first, second];
+  const goldBefore = p.gold;
+  const hpBefore = p.hp;
+
+  check("单件出售成功", sellEquipment(p, first));
+  check("只移除选中的一件, 保留同名装备", p.bag.length === 1 && p.bag[0] === second);
+  check("按该件售价增加金币", p.gold === goldBefore + first.value);
+  check("重复出售同一件无效", !sellEquipment(p, first) && p.gold === goldBefore + first.value);
+  check("不能出售已穿戴装备", !sellEquipment(p, equipped) && p.equip[equipped.slot] === equipped);
+  check("不能出售背包外的物品副本", !sellEquipment(p, { ...second }) && p.bag[0] === second);
+  check("出售不改变生命", p.hp === hpBefore);
+  check("列表移动后仍可出售剩余装备", sellEquipment(p, second) && p.bag.length === 0);
+  check("逐件出售总金额正确", p.gold === goldBefore + first.value + second.value);
+  check("空背包出售无效", !sellEquipment(p, second) && p.gold === goldBefore + first.value + second.value);
 }
 
 console.log("== 冒烟: 地牢结构 ==");

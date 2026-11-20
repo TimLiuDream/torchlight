@@ -373,12 +373,13 @@ export interface MerchantOffer {
   eqPrice: number;
 }
 
-export function MerchantPanel({ player, offer, onBuyPotion, onBuyMana, onBuyEq, onSellAll, onClose }: {
+export function MerchantPanel({ player, offer, onBuyPotion, onBuyMana, onBuyEq, onSellOne, onSellAll, onClose }: {
   player: PlayerState;
   offer: MerchantOffer;
   onBuyPotion: () => void;
   onBuyMana: () => void;
   onBuyEq: () => void;
+  onSellOne: (eq: Equipment) => void;
   onSellAll: () => void;
   onClose: () => void;
 }) {
@@ -433,17 +434,47 @@ export function MerchantPanel({ player, offer, onBuyPotion, onBuyMana, onBuyEq, 
             购买 · {offer.manaPrice}金
           </button>
         </div>
+      </div>
 
-        <div className="bag-card">
-          <div className="skill-icon-badge"><ActionIcon kind="passive" size={26} /></div>
-          <div className="grow">
-            <strong>差遣宠物回城清包</strong>
-            <div className="dim" style={{ fontSize: 12 }}>一键售出背包内全部 {player.bag.length} 件未穿戴装备</div>
-          </div>
-          <button onClick={onSellAll} disabled={player.bag.length === 0}>
-            全卖 · +{bagVal}金
-          </button>
+      <div className="section-sub" style={{ margin: "16px 0 6px" }}>
+        我的行囊 ({player.bag.length}/10) · 出售装备
+      </div>
+      <div className="dim" style={{ fontSize: 12, marginBottom: 8 }}>
+        查看属性后逐件出售，标价即到账金币。当前穿戴的装备不会出售。
+      </div>
+      {player.bag.length === 0 ? (
+        <div className="empty-bag">行囊里没有可出售的装备。</div>
+      ) : (
+        <div className="bag-list">
+          {player.bag.map((eq, i) => (
+            <div className="bag-card" key={i}>
+              <ItemIconBox eq={eq} size={42} />
+              <div className="bag-info grow">
+                <EquipLine eq={eq} />
+                <div style={{ marginTop: 3 }}>
+                  <EquipDelta cand={eq} cur={player.equip[eq.slot]} />
+                </div>
+              </div>
+              <button
+                className="bag-actions"
+                onClick={() => onSellOne(eq)}
+                aria-label={`出售 ${eq.name}，获得 ${eq.value} 金币`}
+              >
+                出售 · +{eq.value}金
+              </button>
+            </div>
+          ))}
         </div>
+      )}
+      <div className="bag-card" style={{ marginTop: 10 }}>
+        <div className="skill-icon-badge"><ActionIcon kind="passive" size={26} /></div>
+        <div className="grow">
+          <strong>差遣宠物回城清包</strong>
+          <div className="dim" style={{ fontSize: 12 }}>也可一次售出行囊内剩余的全部 {player.bag.length} 件装备</div>
+        </div>
+        <button onClick={onSellAll} disabled={player.bag.length === 0}>
+          全卖 · +{bagVal}金
+        </button>
       </div>
 
       <div className="row" style={{ marginTop: 12, justifyContent: "flex-end" }}>

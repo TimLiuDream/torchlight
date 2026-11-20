@@ -33,6 +33,7 @@ export function ActionBar({
   player,
   spriteKey,
   inCombat,
+  canUsePotions,
   onAction,
   onOpenInv,
   onOpenSkill,
@@ -40,6 +41,7 @@ export function ActionBar({
   player: PlayerState;
   spriteKey: string;
   inCombat: boolean;
+  canUsePotions: boolean;
   onAction: (a: Action) => void;
   onOpenInv?: () => void;
   onOpenSkill?: () => void;
@@ -84,20 +86,20 @@ export function ActionBar({
       icon: "hp",
       label: "血瓶",
       badge: `×${player.potions["血瓶"]}`,
-      hot: inCombat,
-      disabled: !inCombat || player.potions["血瓶"] <= 0,
+      hot: canUsePotions,
+      disabled: !canUsePotions || player.potions["血瓶"] <= 0,
       onClick: () => onAction({ kind: "potion", which: "血瓶" }),
-      title: `饮用生命药剂 (剩余 ${player.potions["血瓶"]})`,
+      title: `饮用生命药剂 (快捷键 3, 战斗外也可使用, 剩余 ${player.potions["血瓶"]})`,
     },
     {
       key: "mp",
       icon: "mp",
       label: "蓝瓶",
       badge: `×${player.potions["蓝瓶"]}`,
-      hot: inCombat,
-      disabled: !inCombat || player.potions["蓝瓶"] <= 0,
+      hot: canUsePotions,
+      disabled: !canUsePotions || player.potions["蓝瓶"] <= 0,
       onClick: () => onAction({ kind: "potion", which: "蓝瓶" }),
-      title: `饮用法力药剂 (剩余 ${player.potions["蓝瓶"]})`,
+      title: `饮用法力药剂 (快捷键 4, 战斗外也可使用, 剩余 ${player.potions["蓝瓶"]})`,
     },
   ];
 

@@ -1,6 +1,5 @@
-import { POTIONS } from "./data";
 import {
-  gainExp, playerAtk, playerCrit, playerLeech, playerRegen, maxHp, rollEquipment,
+  gainExp, playerAtk, playerCrit, playerLeech, playerRegen, maxHp, rollEquipment, usePotion,
 } from "./player";
 import type { Rng } from "./rng";
 import type { CombatMonster, CombatState, Equipment, LogLine, Monster, PlayerState } from "./types";
@@ -139,19 +138,16 @@ export function playerAction(state: CombatState, player: PlayerState, rng: Rng, 
       }
     }
   } else {
-    if (player.potions[action.which] <= 0) {
+    const restored = usePotion(player, action.which);
+    if (restored === null) {
       log(state, `没有${action.which}了!`, "info");
       return { ok: false, crit: false };
     }
-    player.potions[action.which] -= 1;
     if (action.which === "血瓶") {
-      const heal = POTIONS.healBase + player.level * POTIONS.healPerLevel;
-      player.hp = Math.min(maxHp(player), player.hp + heal);
-      log(state, `喝下血瓶, 回复 ${heal} 点。`, "heal");
-      state.floats.push({ text: `+${heal}`, x: 0.28, y: 0.42, color: "#4ade80", t: 1.0 });
+      log(state, `喝下血瓶, 回复 ${restored} 点。`, "heal");
+      state.floats.push({ text: `+${restored}`, x: 0.28, y: 0.42, color: "#4ade80", t: 1.0 });
     } else {
-      player.mp = Math.min(player.maxMp, player.mp + POTIONS.mana);
-      log(state, `喝下蓝瓶, 回复 ${POTIONS.mana} 点法力。`, "heal");
+      log(state, `喝下蓝瓶, 回复 ${restored} 点法力。`, "heal");
     }
   }
 

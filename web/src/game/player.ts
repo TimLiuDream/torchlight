@@ -1,5 +1,5 @@
 import {
-  AFFIX_N, LEGEND_NAMES, M_BODY, M_PREFIX, PREFIXES, RARITY_MULT,
+  AFFIX_N, LEGEND_NAMES, M_BODY, M_PREFIX, POTIONS, PREFIXES, RARITY_MULT,
   SETS, SET_DROP_CHANCE, SKILL_TREES, STAT_BONUS, STAT_POINTS_PER_LEVEL, SKILL_POINTS_PER_LEVEL,
 } from "./data";
 import type { Rng } from "./rng";
@@ -222,6 +222,20 @@ export const playerRegen = (p: PlayerState) => equipSum(p, "regen") + setBonuses
 export const expNeed = (p: PlayerState) => p.level * 30;
 export const recLevel = (floor: number) => Math.max(1, Math.floor(floor / 2));
 
+/** 战斗/探索共用的药剂结算。返回实际恢复量; 无药剂时返回 null。是否允许满状态用药由调用方决定。 */
+export function usePotion(p: PlayerState, which: "血瓶" | "蓝瓶"): number | null {
+  if (p.potions[which] <= 0) return null;
+  p.potions[which] -= 1;
+  if (which === "血瓶") {
+    const before = p.hp;
+    p.hp = Math.min(maxHp(p), p.hp + POTIONS.healBase + p.level * POTIONS.healPerLevel);
+    return p.hp - before;
+  }
+  const before = p.mp;
+  p.mp = Math.min(p.maxMp, p.mp + POTIONS.mana);
+  return p.mp - before;
+}
+
 /** 升级检查, 返回升了几级(供 UI 提示)。升级回满血蓝, 并发放成长点。 */
 export function gainExp(p: PlayerState, exp: number): number {
   p.exp += exp;
@@ -263,6 +277,15 @@ export function learnSkillNode(p: PlayerState, node: SkillNode): string | null {
   if (node.active) p.skill = { ...node.active };
   p.hp = Math.min(p.hp, maxHp(p));
   return null;
+}
+
+/** 按物品引用出售背包中的一件装备, 不出售穿戴中或已经售出的物品。 */
+export function sellEquipment(p: PlayerState, eq: Equipment): boolean {
+  const index = p.bag.indexOf(eq);
+  if (index < 0) return false;
+  p.bag.splice(index, 1);
+  p.gold += eq.value;
+  return true;
 }
 
 /** 穿装备, 返回换下的旧装备。hp 超上限收拢。 */

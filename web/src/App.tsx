@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { CLASSES, EMPTY_LINES } from "./game/data";
-import { createPlayer, learnSkillNode, makeElite, maxHp, recLevel, rollEquipment, spendStat } from "./game/player";
+import { createPlayer, learnSkillNode, makeElite, maxHp, recLevel, rollEquipment, sellEquipment, spendStat, usePotion } from "./game/player";
 import { Rng } from "./game/rng";
 import { clearSave, loadGame, saveGame } from "./game/save";
 import {
@@ -336,6 +336,29 @@ export default function App() {
     });
   };
 
+  // 统一动作入口: 战斗沿用回合结算, 探索时可直接喝药且不推进怪物回合。
+  const onAction = (action: Action) => {
+    if (scene !== "play" || overlay) return;
+    if (combatRef.current) { onCombatAction(action); return; }
+    const p = playerRef.current;
+    const map = mapRef.current;
+    if (!p || !map || p.hp <= 0 || action.kind !== "potion") return;
+    if (p.potions[action.which] <= 0) { showToast(`没有${action.which}了!`); return; }
+    const isHp = action.which === "血瓶";
+    if (isHp ? p.hp >= maxHp(p) : p.mp >= p.maxMp) {
+      showToast(isHp ? "生命已满, 无需使用血瓶。" : "法力已满, 无需使用蓝瓶。");
+      return;
+    }
+    const restored = usePotion(p, action.which);
+    if (restored === null) return;
+    dlog(`喝下${action.which}, 回复 ${restored} 点${isHp ? "生命" : "法力"}。`, "heal");
+    const [wx, wy] = worldToScreenCam(map.playerX, map.playerY);
+    fx.heal(wx, wy - 20);
+    addWorldFloat(map.playerX, map.playerY, `+${restored}${isHp ? "生命" : "法力"}`, isHp ? "#4ade80" : "#60a5fa");
+    persist();
+    force();
+  };
+
   // ---------------- 地牢交互 ----------------
   const afterPlayerAct = () => {
     const map = mapRef.current!;
@@ -506,6 +529,13 @@ export default function App() {
     setOverlay(null);
     persist(); force();
   };
+  const sellOne = (eq: Equipment) => {
+    const p = playerRef.current;
+    if (!p || overlay !== "merchant" || !merchantRef.current || combatRef.current) return;
+    if (!sellEquipment(p, eq)) return;
+    dlog(`卖出 ${eq.name}, 获得 ${eq.value} 金币。`, "loot");
+    persist(); force();
+  };
   const sellAll = () => {
     const p = playerRef.current!;
     if (!p.bag.length) return;
@@ -609,11 +639,13 @@ export default function App() {
           }
           return;
         }
+        if (k === "3" || k === "4") {
+          if (!e.repeat) onAction({ kind: "potion", which: k === "3" ? "血瓶" : "蓝瓶" });
+          return;
+        }
         if (combatRef.current) {
           if (k === "1") onCombatAction({ kind: "attack" });
           else if (k === "2") onCombatAction({ kind: "skill" });
-          else if (k === "3") onCombatAction({ kind: "potion", which: "血瓶" });
-          else if (k === "4") onCombatAction({ kind: "potion", which: "蓝瓶" });
           else if (k === "k") { setOverlay("skill"); force(); }
           return;
         }
@@ -761,7 +793,8 @@ export default function App() {
           player={p}
           spriteKey={spriteKeyRef.current}
           inCombat={!!combat && !combatBusyRef.current && combat.phase === "player"}
-          onAction={onCombatAction}
+          canUsePotions={!overlay && (!combat || (!combatBusyRef.current && combat.phase === "player"))}
+          onAction={onAction}
           onOpenInv={() => { setOverlay(overlay === "inv" ? null : "inv"); force(); }}
           onOpenSkill={() => { setOverlay(overlay === "skill" ? null : "skill"); force(); }}
         />
@@ -794,6 +827,7 @@ export default function App() {
           onBuyPotion={buyPotion}
           onBuyMana={buyMana}
           onBuyEq={buyEq}
+          onSellOne={sellOne}
           onSellAll={sellAll}
           onClose={() => { setOverlay(null); merchantRef.current = null; force(); }}
         />
