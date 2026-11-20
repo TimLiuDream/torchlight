@@ -1,5 +1,5 @@
 // 战斗骨骼切片木偶变形 (Sliced Puppet Rig) + 冲刺残影 + 飞行弹道 + 镜头推拉特写系统。
-import { hdImg } from "./hdAssets";
+import { hdImg, monsterCombatFlip } from "./hdAssets";
 import * as fx from "./particles";
 import type { SkillKind } from "../game/types";
 
@@ -128,8 +128,8 @@ export function triggerMonsterHit(monId: number, heavy = false): void {
   const p = getMonPose(monId);
   p.flash = heavy ? 0.28 : 0.2;
   p.flashTint = "white";
-  p.ox = heavy ? 34 : 22;
-  p.bend = heavy ? 36 : 24;
+  p.ox = heavy ? 26 : 16;
+  p.bend = heavy ? 27 : 18;
   p.squash = -0.12;
 }
 
@@ -137,8 +137,8 @@ export function triggerMonsterHit(monId: number, heavy = false): void {
 export function triggerHeroHit(heroX: number, heroY: number, heavy = false): void {
   heroPose.flash = 0.26;
   heroPose.flashTint = "crimson";
-  heroPose.ox = heavy ? -32 : -22;
-  heroPose.bend = heavy ? -34 : -24;
+  heroPose.ox = heavy ? -22 : -15;
+  heroPose.bend = heavy ? -25 : -17;
   heroPose.squash = -0.1;
   bloodVignette = heavy ? 0.85 : 0.58;
 
@@ -180,8 +180,8 @@ export function playHeroAction(opts: {
     timelines.push({
       actor: "hero",
       t: 0,
-      dur: 0.34,
-      impactAt: 0.12,
+      dur: 0.48,
+      impactAt: 0.17,
       impacted: false,
       onImpact,
       onDone,
@@ -211,14 +211,14 @@ export function playHeroAction(opts: {
       maxLife: 0.55,
     });
 
-    const castTime = 0.15;
-    const flightTime = sk === "nova" ? 0.24 : 0.19;
+    const castTime = 0.21;
+    const flightTime = sk === "nova" ? 0.34 : 0.27;
     let launched = false;
 
     timelines.push({
       actor: "hero",
       t: 0,
-      dur: castTime + flightTime + 0.16,
+      dur: castTime + flightTime + 0.22,
       impactAt: castTime + flightTime,
       impacted: false,
       onImpact: () => {
@@ -230,7 +230,7 @@ export function playHeroAction(opts: {
         onDone();
       },
       update: (p) => {
-        const sec = p * (castTime + flightTime + 0.16);
+        const sec = p * (castTime + flightTime + 0.22);
         if (sec < castTime) {
           const u = sec / castTime;
           heroPose.oy = -u * 18;
@@ -254,7 +254,7 @@ export function playHeroAction(opts: {
                     arcH: 0,
                     t: 0,
                     dur: flightTime,
-                    delay: idx * 0.03 + k * 0.04,
+                    delay: idx * 0.045 + k * 0.06,
                     impacted: false,
                   });
                 }
@@ -275,7 +275,7 @@ export function playHeroAction(opts: {
                 projectiles.push({
                   kind: "fireball",
                   x0: staffX, y0: staffY + 14, x1: tx, y1: ty + 12,
-                  arcH: 18, t: 0, dur: flightTime, delay: 0.03, impacted: false,
+                  arcH: 18, t: 0, dur: flightTime, delay: 0.045, impacted: false,
                 });
               }
             }
@@ -306,8 +306,8 @@ export function playHeroAction(opts: {
     timelines.push({
       actor: "hero",
       t: 0,
-      dur: 0.5,
-      impactAt: 0.3,
+      dur: 0.72,
+      impactAt: 0.43,
       impacted: false,
       onImpact: () => {
         punchZoom((heroBaseX + tx) * 0.5, ty, 1.06, 0.15);
@@ -328,7 +328,7 @@ export function playHeroAction(opts: {
             projectiles.push({
               kind: "plasma",
               x0: fromX, y0: fromY, x1: mx, y1: my,
-              arcH: -8, t: 0, dur: 0.14, delay: idx * 0.025, impacted: false,
+              arcH: -8, t: 0, dur: 0.2, delay: idx * 0.035, impacted: false,
             });
             if (turret) turret.recoil = 1;
           });
@@ -344,8 +344,8 @@ export function playHeroAction(opts: {
     timelines.push({
       actor: "hero",
       t: 0,
-      dur: 0.52,
-      impactAt: 0.34,
+      dur: 0.75,
+      impactAt: 0.49,
       impacted: false,
       onImpact: () => {
         punchZoom((heroBaseX + tx) * 0.5, heroFootY - 40, 1.08, 0.2);
@@ -374,7 +374,7 @@ export function playHeroAction(opts: {
             projectiles.push({
               kind: "shockwave",
               x0: heroBaseX + 60, y0: heroFootY - 8, x1: tx + 90, y1: heroFootY - 8,
-              arcH: 0, t: 0, dur: 0.16, delay: 0, impacted: false,
+              arcH: 0, t: 0, dur: 0.23, delay: 0, impacted: false,
             });
           }
           const u = (p - 0.3) / 0.22;
@@ -388,15 +388,16 @@ export function playHeroAction(opts: {
   }
 
   // 5) 近战冲刺劈砍 / 旋风斩 (战士普攻&旋风斩 / 工程师重锤普攻)
-  const travelDist = Math.max(80, tx - 86 - heroBaseX);
+  // 冲刺距离收敛: 最多推进 230px, 不再横跨半个战场贴到怪物脸上
+  const travelDist = Math.max(60, Math.min(tx - heroBaseX - 140, 230));
   const isSpin = actionKind === "skill" && (skillKind === "whirl" || skillKind === "leechWhirl");
   let ghostTick = 0;
 
   timelines.push({
     actor: "hero",
     t: 0,
-    dur: 0.5,
-    impactAt: 0.24,
+    dur: 0.72,
+    impactAt: 0.35,
     impacted: false,
     onImpact: () => {
       punchZoom(tx - 24, heroChestY, actionKind === "skill" ? 1.085 : 1.055, 0.17);
@@ -423,7 +424,7 @@ export function playHeroAction(opts: {
         heroPose.squash = 0.12 * Math.sin(u * Math.PI);
 
         ghostTick += dt;
-        if (ghostTick >= 0.026) {
+        if (ghostTick >= 0.037) {
           ghostTick = 0;
           afterimages.push({
             key: spriteKey,
@@ -480,14 +481,14 @@ export function playMonsterAttack(opts: {
   // 远程怪物: 骷髅弓手(骨箭) / 幽魂(冥火球) / 史莱姆(高抛腐蚀酸液)
   if (body === "skeleton" || body === "ghost" || body === "slime") {
     const pKind: ProjectileKind = body === "skeleton" ? "arrow" : body === "ghost" ? "soulorb" : "acid";
-    const windup = 0.12;
-    const flight = body === "skeleton" ? 0.15 : 0.22;
+    const windup = 0.17;
+    const flight = body === "skeleton" ? 0.22 : 0.32;
     let shot = false;
 
     timelines.push({
       actor: monId,
       t: 0,
-      dur: windup + flight + 0.1,
+      dur: windup + flight + 0.14,
       impactAt: windup + flight,
       impacted: false,
       onImpact: () => {
@@ -499,7 +500,7 @@ export function playMonsterAttack(opts: {
         onDone();
       },
       update: (p) => {
-        const sec = p * (windup + flight + 0.1);
+        const sec = p * (windup + flight + 0.14);
         if (sec < windup) {
           const u = sec / windup;
           pose.bend = 22 * u; // 向右蓄力拉弓/蓄液
@@ -530,15 +531,16 @@ export function playMonsterAttack(opts: {
   }
 
   // 近战怪物: 蓄力 -> 猛扑至英雄面前 -> 撕咬/重砸 -> 跃回原位
-  const dashLeft = heroBaseX + 90 - monBaseX; // 负值(向左扑)
+  // 负值(向左扑); 扑击距离收敛, 最远 260px, 远处怪物扑半程由爪击特效补足
+  const dashLeft = Math.max(heroBaseX + 90 - monBaseX, -260);
   const isLeaper = body === "hound" || body === "spider" || body === "goblin" || body === "mimic";
   let ghostTick = 0;
 
   timelines.push({
     actor: monId,
     t: 0,
-    dur: 0.42,
-    impactAt: 0.21,
+    dur: 0.6,
+    impactAt: 0.3,
     impacted: false,
     onImpact: () => {
       triggerHeroHit(heroBaseX, heroChestY, boss || body === "brute" || body === "golem");
@@ -563,14 +565,14 @@ export function playMonsterAttack(opts: {
         pose.bend = 22 - 56 * ease; // 猛向前扑(朝左为负)
 
         ghostTick += dt;
-        if (ghostTick >= 0.03) {
+        if (ghostTick >= 0.043) {
           ghostTick = 0;
           afterimages.push({
             key: `mon_${body}`,
             x: monBaseX + pose.ox,
             y: monFootY + pose.oy,
             h: monH,
-            flipX: 1,
+            flipX: monsterCombatFlip(body),
             bend: pose.bend,
             tint: boss ? "#ff5424" : "#ef4444",
             life: 0.15,

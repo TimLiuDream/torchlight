@@ -1,5 +1,5 @@
 import type { CombatState, FloorMap, PlayerState } from "../game/types";
-import { hdImg, monsterHdKey } from "./hdAssets";
+import { hdImg, monsterCombatFlip, monsterFacesRight, monsterHdKey } from "./hdAssets";
 import {
   drawBloodVignette,
   drawHeroCompanionProps,
@@ -379,7 +379,8 @@ export function renderDungeon(
     const footY = sy + TH * 0.8;
     const moving = Math.abs(dx) + Math.abs(dy) > 0.04;
     const targetH = m.boss ? 84 : m.elite ? 66 : 54;
-    const flipX = ip.dir > 0 ? -1 : 1;
+    // 素材原始朝向不同: 面右素材的镜像方向需要反过来
+    const flipX = monsterFacesRight(m.body) ? (ip.dir > 0 ? 1 : -1) : ip.dir > 0 ? -1 : 1;
 
     if (m.elite || m.boss) {
       fx.orbitTick(cx, footY - 8, 24, m.id, dt, m.boss ? "#ff7849" : "#c084fc");
@@ -999,7 +1000,7 @@ export function renderCombat(
         }
 
         drawShadow(ctx, curX, my, targetH * 0.66 * Math.max(0.65, 1 + monPose.oy / 140));
-        drawPuppetSprite(ctx, monsterHdKey(m.body), mx, my, targetH, 1, combatT, i * 1.7 + 0.8, monPose);
+        drawPuppetSprite(ctx, monsterHdKey(m.body), mx, my, targetH, monsterCombatFlip(m.body), combatT, i * 1.7 + 0.8, monPose);
 
         const barW = m.boss ? 92 : 68;
         const barY = curFootY - targetH - 14;

@@ -271,7 +271,10 @@ export default function App() {
         },
         onDone: () => {
           if (battleGenRef.current !== gen || p.hp <= 0) return;
-          runEnemyQueue(idxInLiving + 1);
+          // 怪物出击之间留一拍, 群殴不至于糊脸
+          enemyTimerRef.current = window.setTimeout(() => {
+            if (battleGenRef.current === gen && p.hp > 0) runEnemyQueue(idxInLiving + 1);
+          }, 220);
         },
       });
     };
@@ -331,7 +334,10 @@ export default function App() {
         if (battleGenRef.current !== gen) return;
         if (phaseOf(state) === "won") { finishCombat(); return; }
         if (phaseOf(state) === "lost") { die(); return; }
-        runEnemyQueue(0);
+        // 主角收招后稍作停顿再进入敌方回合
+        enemyTimerRef.current = window.setTimeout(() => {
+          if (battleGenRef.current === gen) runEnemyQueue(0);
+        }, 160);
       },
     });
   };

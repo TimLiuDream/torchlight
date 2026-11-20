@@ -55,3 +55,18 @@ export function hdUrl(key: string): string | undefined {
 export function monsterHdKey(body: string): string {
   return `mon_${body}`;
 }
+
+// 各怪物手绘素材的原始朝向(逐张目检确认)。未列出的默认面朝左。
+const MON_FACES_RIGHT: Record<string, boolean> = {
+  brute: true, // 穴居暴徒: 脸与红眼在画面右侧
+};
+
+/** 战斗中怪物需面向左侧主角, 面右素材取反镜像 */
+export function monsterCombatFlip(body: string): number {
+  return MON_FACES_RIGHT[body] ? -1 : 1;
+}
+
+/** 地牢探索按移动方向决定朝向, 面右素材的镜像方向需反过来 */
+export function monsterFacesRight(body: string): boolean {
+  return MON_FACES_RIGHT[body] ?? false;
+}
